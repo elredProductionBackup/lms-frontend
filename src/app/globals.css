@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-serif: "Playfair Display", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+
+  /* Brand tokens (the Professionals Network) */
+  --brand: #c01823;
+  --brand-dark: #99121b;
+  --brand-gray: #67686b;
+}
+
+html,
+body {
+  background-color: #f6f6f7;
+  color: #1e1f21;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Rich-text rendered from detailsHtml/aboutHtml */
+.prose-lms p {
+  margin-bottom: 0.75rem;
+  line-height: 1.7;
+}
+.prose-lms h1,
+.prose-lms h2,
+.prose-lms h3 {
+  font-family: var(--font-serif);
+  margin: 1rem 0 0.5rem;
+  font-weight: 600;
+}
+.prose-lms ul,
+.prose-lms ol {
+  margin: 0.5rem 0 0.75rem 1.25rem;
+}
+.prose-lms ul {
+  list-style: disc;
+}
+.prose-lms ol {
+  list-style: decimal;
+}
+.prose-lms a {
+  color: var(--brand);
+  text-decoration: underline;
+}
+.prose-lms a:hover {
+  color: var(--brand-dark);
+}
+.prose-lms blockquote {
+  border-left: 3px solid #dedee1;
+  padding-left: 1rem;
+  color: #3b3c3f;
+  font-style: italic;
+}
+
+/* Focus visibility for keyboard users */
+:where(a, button, input, textarea, select):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Custom scrollbar for panels */
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: #d3d3d6;
+  border-radius: 999px;
+}
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: #bfbfc3;
+}
