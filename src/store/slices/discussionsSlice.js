@@ -17,14 +17,32 @@ function sortPinnedFirst(list) {
   });
 }
 
+// Comments, questions and notes belong to ONE recording of a course, not the
+// course as a whole. Every list/create route is scoped by :videoId:
+//
+//   /courses/:id/videos/:videoId/comments
+//   /courses/:id/videos/:videoId/questions
+//
+// The old course-level paths (/courses/:id/comments, ...) now 404
+// ROUTE_NOT_FOUND. By-id routes (pin / unpin / reply / delete / detail) are
+// unchanged.
+const videoPath = (courseId, videoId, kind) =>
+  `/courses/${courseId}/videos/${videoId}/${kind}`;
+
+// True when a thunk's result is for the recording that's loaded right now.
+// Switching recordings can leave a request in flight for the previous one; its
+// response must not land in the new recording's panel.
+const isCurrent = (s, a) => !!a.meta.arg?.videoId && a.meta.arg.videoId === s.videoId;
+
 // ---- Comments ----
 
-// GET /api/courses/:id/comments?start=&offset=  (pinned-first, then oldest-first)
+// GET /api/courses/:id/videos/:videoId/comments?start=&offset=
+// (pinned-first, then oldest-first, this recording only)
 export const fetchComments = createAsyncThunk(
   "disc/comments/list",
-  async ({ courseId, start = 0, offset = PAGE_SIZE, append = false }, { rejectWithValue }) => {
+  async ({ courseId, videoId, start = 0, offset = PAGE_SIZE, append = false }, { rejectWithValue }) => {
     try {
-      const data = await api.get(withPage(`/courses/${courseId}/comments`, { start, offset }));
+      const data = await api.get(withPage(videoPath(courseId, videoId, "comments"), { start, offset }));
       const items = data.comments || [];
       return { items, start, offset, append, hasMore: items.length === offset };
     } catch (e) {
@@ -33,12 +51,13 @@ export const fetchComments = createAsyncThunk(
   }
 );
 
-// POST /api/courses/:id/comments  { text, timestampSeconds? }
+// POST /api/courses/:id/videos/:videoId/comments  { text, timestampSeconds? }
+// timestampSeconds only timestamps the comment; it does NOT save a bookmark.
 export const addComment = createAsyncThunk(
   "disc/comments/add",
-  async ({ courseId, text, timestampSeconds }, { rejectWithValue }) => {
+  async ({ courseId, videoId, text, timestampSeconds }, { rejectWithValue }) => {
     try {
-      return await api.post(`/courses/${courseId}/comments`, {
+      return await api.post(videoPath(courseId, videoId, "comments"), {
         text,
         timestampSeconds,
       });
@@ -100,12 +119,13 @@ export const replyToComment = createAsyncThunk(
 
 // ---- Questions (now public, same model as comments) ----
 
-// GET /api/courses/:id/questions?start=&offset=  (pinned-first, then newest-first)
+// GET /api/courses/:id/videos/:videoId/questions?start=&offset=
+// (pinned-first, then newest-first, this recording only)
 export const fetchQuestions = createAsyncThunk(
   "disc/questions/list",
-  async ({ courseId, start = 0, offset = PAGE_SIZE, append = false }, { rejectWithValue }) => {
+  async ({ courseId, videoId, start = 0, offset = PAGE_SIZE, append = false }, { rejectWithValue }) => {
     try {
-      const data = await api.get(withPage(`/courses/${courseId}/questions`, { start, offset }));
+      const data = await api.get(withPage(videoPath(courseId, videoId, "questions"), { start, offset }));
       const items = data.questions || [];
       return { items, start, offset, append, hasMore: items.length === offset };
     } catch (e) {
@@ -114,12 +134,12 @@ export const fetchQuestions = createAsyncThunk(
   }
 );
 
-// POST /api/courses/:id/questions  { body, timestampSeconds? }
+// POST /api/courses/:id/videos/:videoId/questions  { body, timestampSeconds? }
 export const askQuestion = createAsyncThunk(
   "disc/questions/ask",
-  async ({ courseId, body, timestampSeconds }, { rejectWithValue }) => {
+  async ({ courseId, videoId, body, timestampSeconds }, { rejectWithValue }) => {
     try {
-      return await api.post(`/courses/${courseId}/questions`, {
+      return await api.post(videoPath(courseId, videoId, "questions"), {
         body,
         timestampSeconds,
       });
@@ -130,6 +150,7 @@ export const askQuestion = createAsyncThunk(
 );
 
 // GET /api/questions/:questionId  (now public to any unlocked user)
+// The response includes videoId, so a deep link can open the right recording.
 export const fetchQuestionDetail = createAsyncThunk(
   "disc/questions/detail",
   async (questionId, { rejectWithValue }) => {
@@ -189,6 +210,7 @@ function upsertSorted(list, doc) {
 const slice = createSlice({
   name: "discussions",
   initialState: {
+    videoId: null, // recording whose comments/questions are loaded
     comments: [],
     questions: [],
     activeQuestion: null,
@@ -204,7 +226,27 @@ const slice = createSlice({
     error: null,
   },
   reducers: {
+    // Point the panel at a recording. Nothing carries over between recordings,
+    // so everything loaded for the previous one is dropped.
+    setDiscussionVideo(s, a) {
+      const videoId = a.payload || null;
+      if (s.videoId === videoId) return;
+      s.videoId = videoId;
+      s.comments = [];
+      s.questions = [];
+      s.activeQuestion = null;
+      s.commentsStatus = "idle";
+      s.questionsStatus = "idle";
+      s.commentsHasMore = false;
+      s.questionsHasMore = false;
+      s.commentsStart = 0;
+      s.questionsStart = 0;
+      s.loadingMoreComments = false;
+      s.loadingMoreQuestions = false;
+      s.error = null;
+    },
     clearDiscussions(s) {
+      s.videoId = null;
       s.comments = [];
       s.questions = [];
       s.activeQuestion = null;
@@ -217,10 +259,12 @@ const slice = createSlice({
   extraReducers: (b) => {
     // ----- comments -----
     b.addCase(fetchComments.pending, (s, a) => {
+      if (!isCurrent(s, a)) return;
       if (a.meta.arg?.append) s.loadingMoreComments = true;
       else s.commentsStatus = "loading";
     })
       .addCase(fetchComments.fulfilled, (s, a) => {
+        if (!isCurrent(s, a)) return;
         s.commentsStatus = "idle";
         s.loadingMoreComments = false;
         const { items, start, append, hasMore } = a.payload;
@@ -229,6 +273,7 @@ const slice = createSlice({
         s.commentsHasMore = hasMore;
       })
       .addCase(fetchComments.rejected, (s, a) => {
+        if (!isCurrent(s, a)) return;
         s.commentsStatus = "error";
         s.loadingMoreComments = false;
         s.error = a.payload?.message;
@@ -240,6 +285,7 @@ const slice = createSlice({
     })
       .addCase(addComment.fulfilled, (s, a) => {
         s.posting = false;
+        if (!isCurrent(s, a)) return; // posted on a recording we've since left
         s.comments.push(a.payload); // oldest-first tail; pinned still lead
         s.comments = sortPinnedFirst(s.comments);
         s.commentsStart += 1;
@@ -267,10 +313,12 @@ const slice = createSlice({
 
     // ----- questions -----
     b.addCase(fetchQuestions.pending, (s, a) => {
+      if (!isCurrent(s, a)) return;
       if (a.meta.arg?.append) s.loadingMoreQuestions = true;
       else s.questionsStatus = "loading";
     })
       .addCase(fetchQuestions.fulfilled, (s, a) => {
+        if (!isCurrent(s, a)) return;
         s.questionsStatus = "idle";
         s.loadingMoreQuestions = false;
         const { items, start, append, hasMore } = a.payload;
@@ -279,6 +327,7 @@ const slice = createSlice({
         s.questionsHasMore = hasMore;
       })
       .addCase(fetchQuestions.rejected, (s, a) => {
+        if (!isCurrent(s, a)) return;
         s.questionsStatus = "error";
         s.loadingMoreQuestions = false;
         s.error = a.payload?.message;
@@ -290,6 +339,7 @@ const slice = createSlice({
     })
       .addCase(askQuestion.fulfilled, (s, a) => {
         s.posting = false;
+        if (!isCurrent(s, a)) return;
         s.questions.unshift(a.payload); // newest-first
         s.questions = sortPinnedFirst(s.questions);
         s.questionsStart += 1;
@@ -318,5 +368,5 @@ const slice = createSlice({
   },
 });
 
-export const { clearDiscussions } = slice.actions;
+export const { setDiscussionVideo, clearDiscussions } = slice.actions;
 export default slice.reducer;

@@ -7,14 +7,19 @@ import {
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Lock, Loader2,
   Gauge, Bookmark, BookmarkPlus, Trash2, Captions, CaptionsOff,
-  RotateCcw, RotateCw, RectangleHorizontal,
+  RotateCcw, RotateCw, RectangleHorizontal, Pencil,
 } from "lucide-react";
-import { useAppDispatch } from "@/hooks/redux";
+import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import {
   startStreamSession,
   streamHeartbeat,
   saveProgress,
 } from "@/store/slices/videosSlice";
+import {
+  addBookmark as saveBookmark,
+  renameBookmark,
+  deleteBookmark,
+} from "@/store/slices/bookmarksSlice";
 import { clock } from "@/lib/format";
 
 // Available playback speeds. Speed can be changed freely — only *seeking ahead*
@@ -36,7 +41,15 @@ const SKIP_STEP = 10;
 const RESUME_PROMPT_SECONDS = 8;
 
 const CAPTIONS_PREF_KEY = "lms.captions.on";
-const bookmarksKey = (videoId) => `lms.bookmarks.${videoId}`;
+
+// Max bookmark label length the API accepts.
+const BOOKMARK_LABEL_MAX = 200;
+
+// Before bookmarks were saved server-side they lived in localStorage under this
+// key, as [{ id, time, createdAt }]. On first load of a recording we upload any
+// leftovers once (the API dedupes per second) and then drop the local copy.
+const legacyBookmarksKey = (videoId) => `lms.bookmarks.${videoId}`;
+const migratingVideos = new Set(); // guards StrictMode double-effects
 
 function loadCaptionPref() {
   if (typeof window === "undefined") return false;
@@ -56,23 +69,24 @@ function persistCaptionPref(on) {
   }
 }
 
-function loadBookmarks(videoId) {
+function readLegacyBookmarks(videoId) {
   if (typeof window === "undefined" || !videoId) return [];
   try {
-    const raw = window.localStorage.getItem(bookmarksKey(videoId));
+    const raw = window.localStorage.getItem(legacyBookmarksKey(videoId));
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed)
+      ? parsed.map((b) => Number(b?.time)).filter((t) => Number.isFinite(t) && t >= 0)
+      : [];
   } catch {
     return [];
   }
 }
 
-function persistBookmarks(videoId, list) {
-  if (typeof window === "undefined" || !videoId) return;
+function dropLegacyBookmarks(videoId) {
   try {
-    window.localStorage.setItem(bookmarksKey(videoId), JSON.stringify(list));
+    window.localStorage.removeItem(legacyBookmarksKey(videoId));
   } catch {
-    /* storage full / disabled — bookmarks just won't persist */
+    /* ignore */
   }
 }
 
@@ -110,7 +124,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
   const [resumePrompt, setResumePrompt] = useState(null);
   const [rate, setRate] = useState(1);
   const [speedOpen, setSpeedOpen] = useState(false);
-  const [bookmarks, setBookmarks] = useState([]);
+  const [renamingId, setRenamingId] = useState(null); // bookmark being renamed
+  const [renameText, setRenameText] = useState("");
   const [toast, setToast] = useState(null); // transient "−10s" / "Jumped to…" hint
 
   // Captions
@@ -120,6 +135,12 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 
   const videoId = video?._id;
   const ready = video?.status === "ready";
+
+  // Saved bookmarks for this recording (loaded by the course page alongside the
+  // discussion panels). Guard on videoId so the previous recording's markers
+  // never flash on the new one while its list loads.
+  const bookmarkState = useAppSelector((s) => s.bookmarks);
+  const bookmarks = bookmarkState.videoId === videoId ? bookmarkState.items : [];
   // captionsStatus may or may not be present on the course's video object; if
   // it's explicitly not ready we skip the fetch, otherwise we probe for a track.
   const captionsMaybe =
@@ -169,11 +190,31 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unlocked, ready, videoId, courseId]);
 
-  // --- Bookmarks + caption preference: load per video ---
+  // --- Caption preference + reset bookmark rename: per video ---
   useEffect(() => {
-    setBookmarks(loadBookmarks(videoId));
     setCaptionsOn(loadCaptionPref());
+    setRenamingId(null);
   }, [videoId]);
+
+  // --- One-time upload of bookmarks saved in this browser before the API ---
+  useEffect(() => {
+    if (!unlocked || !courseId || !videoId || migratingVideos.has(videoId)) return;
+    const times = readLegacyBookmarks(videoId);
+    if (times.length === 0) return;
+    migratingVideos.add(videoId);
+    (async () => {
+      try {
+        for (const t of times) {
+          await dispatch(saveBookmark({ courseId, videoId, timestampSeconds: t })).unwrap();
+        }
+        dropLegacyBookmarks(videoId); // only once every one made it
+      } catch {
+        // Keep the local copy; we'll try again next time this recording loads.
+      } finally {
+        migratingVideos.delete(videoId);
+      }
+    })();
+  }, [unlocked, courseId, videoId, dispatch]);
 
   // --- Fetch WebVTT captions through the signed stream cookie ---
   // We fetch (rather than pointing <track src> straight at the URL) so the
@@ -563,28 +604,37 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     }
   };
 
-  // --- Bookmarks ---
-  const addBookmark = () => {
+  // --- Bookmarks (saved server-side, per recording, private to the learner) ---
+  // Sends the raw currentTime; the API floors it to whole seconds and returns
+  // the existing bookmark if that second is already saved, so repeat clicks
+  // never create duplicates.
+  const addBookmark = async () => {
     const el = videoRef.current;
-    if (!el) return;
-    const time = Math.floor(el.currentTime || 0);
-    setBookmarks((prev) => {
-      if (prev.some((b) => Math.abs(b.time - time) <= 1)) return prev;
-      const next = [
-        ...prev,
-        { id: `${Date.now()}-${time}`, time, createdAt: Date.now() },
-      ].sort((a, b) => a.time - b.time);
-      persistBookmarks(videoId, next);
-      return next;
-    });
+    if (!el || !videoId) return;
+    const timestampSeconds = Math.max(0, el.currentTime || 0);
+    try {
+      await dispatch(saveBookmark({ courseId, videoId, timestampSeconds })).unwrap();
+      flashToast(`Bookmarked ${clock(timestampSeconds)}`);
+    } catch (e) {
+      flashToast(e?.message || "Couldn't save bookmark");
+    }
   };
 
-  const removeBookmark = (id) => {
-    setBookmarks((prev) => {
-      const next = prev.filter((b) => b.id !== id);
-      persistBookmarks(videoId, next);
-      return next;
-    });
+  const removeBookmark = (bookmarkId) => {
+    if (renamingId === bookmarkId) setRenamingId(null);
+    dispatch(deleteBookmark(bookmarkId));
+  };
+
+  const startRename = (b) => {
+    setRenamingId(b._id);
+    setRenameText(b.label || "");
+  };
+
+  const commitRename = (b) => {
+    const label = renameText.trim().slice(0, BOOKMARK_LABEL_MAX);
+    setRenamingId(null);
+    if (label === (b.label || "")) return;
+    dispatch(renameBookmark({ bookmarkId: b._id, label })); // "" clears it
   };
 
   const jumpToBookmark = (time) => {
@@ -750,9 +800,10 @@ const VideoPlayer = forwardRef(function VideoPlayer(
           {duration > 0 &&
             bookmarks.map((b) => (
               <span
-                key={b.id}
+                key={b._id}
+                title={b.label ? `${clock(b.timestampSeconds)} · ${b.label}` : clock(b.timestampSeconds)}
                 className="absolute top-1/2 h-2.5 w-[3px] -translate-y-1/2 rounded-sm bg-frontend-light"
-                style={{ left: `${Math.min(100, (b.time / duration) * 100)}%` }}
+                style={{ left: `${Math.min(100, (b.timestampSeconds / duration) * 100)}%` }}
               />
             ))}
         </div>
@@ -824,6 +875,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
           {/* Bookmark current spot — label collapses to icon-only on mobile */}
           <button
             onClick={addBookmark}
+            disabled={!videoId}
             className="flex items-center gap-1.5 rounded-full border border-white/15 px-2 py-1 text-xs text-cream-100 transition-colors hover:bg-white/10 sm:px-2.5"
             aria-label="Bookmark this moment"
             title="Bookmark this moment"
@@ -891,18 +943,46 @@ const VideoPlayer = forwardRef(function VideoPlayer(
           <div className="flex flex-wrap gap-2">
             {bookmarks.map((b) => (
               <span
-                key={b.id}
-                className="group flex items-center gap-1 rounded-full bg-white/8 py-1 pl-2.5 pr-1 text-xs text-cream-100"
+                key={b._id}
+                className="group flex max-w-full items-center gap-1 rounded-full bg-white/8 py-1 pl-2.5 pr-1 text-xs text-cream-100"
               >
                 <button
-                  onClick={() => jumpToBookmark(b.time)}
-                  className="font-mono hover:text-white"
+                  onClick={() => jumpToBookmark(b.timestampSeconds)}
+                  className="flex min-w-0 items-center gap-1.5 hover:text-white"
                   title="Jump to bookmark"
                 >
-                  {clock(b.time)}
+                  <span className="font-mono">{clock(b.timestampSeconds)}</span>
+                  {b.label && renamingId !== b._id && (
+                    <span className="max-w-[12rem] truncate text-cream-300">{b.label}</span>
+                  )}
                 </button>
+                {renamingId === b._id ? (
+                  <input
+                    autoFocus
+                    value={renameText}
+                    maxLength={BOOKMARK_LABEL_MAX}
+                    placeholder="Label"
+                    onChange={(e) => setRenameText(e.target.value)}
+                    onBlur={() => commitRename(b)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitRename(b);
+                      if (e.key === "Escape") setRenamingId(null);
+                    }}
+                    className="w-36 rounded bg-white/10 px-1.5 py-0.5 text-xs text-cream-100 outline-none placeholder:text-cream-300/60"
+                    aria-label="Bookmark label"
+                  />
+                ) : (
+                  <button
+                    onClick={() => startRename(b)}
+                    className="rounded-full p-0.5 text-cream-300 opacity-60 transition-opacity hover:text-white group-hover:opacity-100"
+                    aria-label={b.label ? "Rename bookmark" : "Add a label"}
+                    title={b.label ? "Rename" : "Add a label"}
+                  >
+                    <Pencil size={12} />
+                  </button>
+                )}
                 <button
-                  onClick={() => removeBookmark(b.id)}
+                  onClick={() => removeBookmark(b._id)}
                   className="rounded-full p-0.5 text-cream-300 opacity-60 transition-opacity hover:text-white group-hover:opacity-100"
                   aria-label="Remove bookmark"
                 >
@@ -917,4 +997,4 @@ const VideoPlayer = forwardRef(function VideoPlayer(
   );
 });
 
-export default VideoPlayer;
+export default VideoPlayer;

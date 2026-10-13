@@ -5,6 +5,7 @@ import coursesReducer from "./slices/coursesSlice";
 import videosReducer from "./slices/videosSlice";
 import discussionsReducer from "./slices/discussionsSlice";
 import notesReducer from "./slices/notesSlice";
+import bookmarksReducer from "./slices/bookmarksSlice";
 import membersReducer from "./slices/membersSlice";
 import joinRequestsReducer from "./slices/joinRequestsSlice";
 import subscriptionsReducer from "./slices/subscriptionsSlice";
@@ -20,6 +21,7 @@ export const store = configureStore({
     videos: videosReducer,
     discussions: discussionsReducer,
     notes: notesReducer,
+    bookmarks: bookmarksReducer,
     members: membersReducer,
     joinRequests: joinRequestsReducer,
     subscriptions: subscriptionsReducer,

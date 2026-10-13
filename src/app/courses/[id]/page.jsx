@@ -1,13 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, PlayCircle, CircleCheck, Lock } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { fetchCourse, clearCurrentCourse } from "@/store/slices/coursesSlice";
-import { clearDiscussions } from "@/store/slices/discussionsSlice";
-import { clearNotes } from "@/store/slices/notesSlice";
+import {
+  clearDiscussions,
+  setDiscussionVideo,
+  fetchComments,
+  fetchQuestions,
+} from "@/store/slices/discussionsSlice";
+import { clearNotes, setNotesVideo, fetchNotes } from "@/store/slices/notesSlice";
+import {
+  clearBookmarks,
+  setBookmarksVideo,
+  fetchBookmarks,
+} from "@/store/slices/bookmarksSlice";
 import RouteGuard from "@/components/auth/RouteGuard";
 import TopNav from "@/components/learner/TopNav";
 import VideoPlayer from "@/components/learner/VideoPlayer";
@@ -19,7 +29,9 @@ function PlayerInner() {
   const { id } = useParams();
   const dispatch = useAppDispatch();
   const { current, detailStatus } = useAppSelector((s) => s.courses);
-  const [activeIdx, setActiveIdx] = useState(0);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [currentTime, setCurrentTime] = useState(0);
   const [wide, setWide] = useState(false); // theater / full-width mode
   const playerRef = useRef(null);
@@ -30,8 +42,56 @@ function PlayerInner() {
       dispatch(clearCurrentCourse());
       dispatch(clearDiscussions());
       dispatch(clearNotes());
+      dispatch(clearBookmarks());
     };
   }, [id, dispatch]);
+
+  // Comments, questions, notes and bookmarks all belong to the recording in the
+  // player, not the course. Whenever that recording changes, point every panel
+  // at it (dropping the previous recording's data) and load all four lists in
+  // parallel. Nothing carries over between recordings.
+  //
+  // The selected recording lives in the URL (?video=<videoId>) so a refresh,
+  // a shared link or reopening the tab lands on the same recording. If the
+  // param is missing or points at a recording that's no longer in the course,
+  // fall back to the first one.
+  const videoList = current?.videos || [];
+  const requestedVideoId = searchParams.get("video");
+  const selectedVideo =
+    videoList.find((v) => v._id === requestedVideoId) || videoList[0] || null;
+  const activeVideoId = selectedVideo?._id || null;
+
+  // Write the selection into the URL. replace (not push) so Back still returns
+  // to the sessions list instead of stepping through every recording clicked.
+  const selectVideo = useCallback(
+    (videoId) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("video", videoId);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [router, pathname, searchParams]
+  );
+
+  // Tidy a stale ?video= (e.g. the recording was deleted) to the one we fell
+  // back to, so the URL always matches what's on screen.
+  const courseLoaded = current?._id === id;
+  useEffect(() => {
+    if (!courseLoaded || !requestedVideoId || !activeVideoId) return;
+    if (requestedVideoId !== activeVideoId) selectVideo(activeVideoId);
+  }, [courseLoaded, requestedVideoId, activeVideoId, selectVideo]);
+  const canLoadPanels = !!current?.unlocked && current?._id === id;
+
+  useEffect(() => {
+    dispatch(setDiscussionVideo(activeVideoId));
+    dispatch(setNotesVideo(activeVideoId));
+    dispatch(setBookmarksVideo(activeVideoId));
+    if (!activeVideoId || !canLoadPanels) return;
+    const args = { courseId: id, videoId: activeVideoId };
+    dispatch(fetchComments(args));
+    dispatch(fetchQuestions(args));
+    dispatch(fetchNotes(args));
+    dispatch(fetchBookmarks(args));
+  }, [id, activeVideoId, canLoadPanels, dispatch]);
 
   if (detailStatus === "loading" || !current) {
     return (
@@ -42,7 +102,7 @@ function PlayerInner() {
   }
 
   const videos = current.videos || [];
-  const activeVideo = videos[activeIdx] || videos[0];
+  const activeVideo = selectedVideo;
   const unlocked = !!current.unlocked;
 
   // A seek requested from a discussion timestamp chip: hand it to the player,
@@ -139,12 +199,12 @@ function PlayerInner() {
                 </h2>
                 <div className="space-y-2">
                   {videos.map((v, i) => {
-                    const active = i === activeIdx;
+                    const active = v._id === activeVideoId;
                     const ready = v.status === "ready";
                     return (
                       <button
                         key={v._id}
-                        onClick={() => ready && unlocked && setActiveIdx(i)}
+                        onClick={() => ready && unlocked && !active && selectVideo(v._id)}
                         disabled={!ready || !unlocked}
                         className={`flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition-colors sm:px-4 ${
                           active
@@ -187,7 +247,12 @@ function PlayerInner() {
                 : "lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:sticky lg:top-20 lg:h-[calc(100vh-6rem)]"
             }`}
           >
-            <DiscussionPanel courseId={id} currentTime={currentTime} seekTo={requestSeek} />
+            <DiscussionPanel
+              courseId={id}
+              videoId={activeVideo?._id}
+              currentTime={currentTime}
+              seekTo={requestSeek}
+            />
           </aside>
         </div>
       </main>
@@ -198,7 +263,16 @@ function PlayerInner() {
 export default function CoursePlayerPage() {
   return (
     <RouteGuard>
-      <PlayerInner />
+      {/* useSearchParams (the ?video= selection) needs a Suspense boundary. */}
+      <Suspense
+        fallback={
+          <div className="flex min-h-[60vh] items-center justify-center">
+            <Spinner size={28} />
+          </div>
+        }
+      >
+        <PlayerInner />
+      </Suspense>
     </RouteGuard>
   );
 }

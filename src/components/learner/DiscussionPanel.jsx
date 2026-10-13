@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Clock,
-  Bookmark,
   Send,
   Trash2,
   CornerDownRight,
@@ -55,18 +54,14 @@ const TABS = [
   { value: "notes", label: "My notes" },
 ];
 
-export default function DiscussionPanel({ courseId, currentTime, seekTo }) {
-  const dispatch = useAppDispatch();
+// Comments, questions and notes are per recording: everything here is scoped
+// to `videoId`, the recording currently loaded in the player. The course page
+// owns loading (it refetches all panels whenever the recording changes); this
+// component only posts, paginates and moderates.
+export default function DiscussionPanel({ courseId, videoId, currentTime, seekTo }) {
   const [tab, setTab] = useState("comments");
   const { role, user } = useAppSelector((s) => s.auth);
   const canModerate = role === "admin" || role === "author";
-
-  useEffect(() => {
-    if (!courseId) return;
-    dispatch(fetchComments({ courseId }));
-    dispatch(fetchQuestions({ courseId }));
-    dispatch(fetchNotes(courseId));
-  }, [courseId, dispatch]);
 
   return (
     <div className="flex h-full flex-col rounded-card border border-ink/8 bg-cream-50 shadow-soft">
@@ -74,29 +69,41 @@ export default function DiscussionPanel({ courseId, currentTime, seekTo }) {
         <Tabs tabs={TABS} active={tab} onChange={setTab} />
       </div>
       <div className="flex-1 overflow-hidden p-4">
-        {tab === "comments" && (
-          <CommentsTab courseId={courseId} currentTime={currentTime} seekTo={seekTo} user={user} canModerate={canModerate} />
-        )}
-        {tab === "questions" && (
-          <QuestionsTab courseId={courseId} currentTime={currentTime} seekTo={seekTo} canModerate={canModerate} user={user} />
-        )}
-        {tab === "notes" && (
-          <NotesTab courseId={courseId} currentTime={currentTime} seekTo={seekTo} />
+        {!videoId ? (
+          <p className="py-10 text-center text-sm text-ink-muted">
+            Comments, questions and notes appear here once a recording is available.
+          </p>
+        ) : (
+          <>
+            {tab === "comments" && (
+              <CommentsTab courseId={courseId} videoId={videoId} currentTime={currentTime} seekTo={seekTo} user={user} canModerate={canModerate} />
+            )}
+            {tab === "questions" && (
+              <QuestionsTab courseId={courseId} videoId={videoId} currentTime={currentTime} seekTo={seekTo} canModerate={canModerate} user={user} />
+            )}
+            {tab === "notes" && (
+              <NotesTab courseId={courseId} videoId={videoId} currentTime={currentTime} seekTo={seekTo} />
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
 
-function Composer({ placeholder, onSubmit, posting, currentTime, showBookmark = true }) {
+// The "At 0:14" chip only attaches the player's current time to the post
+// (timestampSeconds in the POST body). It does NOT save a bookmark; saved
+// bookmarks come from the player's Bookmark button. It used to read
+// "Bookmark at 0:14", which was easy to confuse with that button.
+function Composer({ placeholder, onSubmit, posting, currentTime, showTimestamp = true }) {
   const [text, setText] = useState("");
-  const [bookmarked, setBookmarked] = useState(false);
+  const [stamped, setStamped] = useState(false);
 
   const submit = () => {
     if (!text.trim()) return;
-    onSubmit(text.trim(), bookmarked ? Math.floor(currentTime) : undefined);
+    onSubmit(text.trim(), stamped ? Math.floor(currentTime) : undefined);
     setText("");
-    setBookmarked(false);
+    setStamped(false);
   };
 
   return (
@@ -109,16 +116,18 @@ function Composer({ placeholder, onSubmit, posting, currentTime, showBookmark = 
         className="border-0 bg-transparent p-0 focus:bg-transparent"
       />
       <div className="mt-2 flex items-center justify-between">
-        {showBookmark ? (
+        {showTimestamp ? (
           <button
-            onClick={() => setBookmarked((v) => !v)}
+            onClick={() => setStamped((v) => !v)}
+            aria-pressed={stamped}
+            title="Attach the current video time to this post"
             className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
-              bookmarked
+              stamped
                 ? "border-teal bg-teal/10 text-teal"
                 : "border-ink/15 text-ink-muted hover:text-ink"
             }`}
           >
-            <Bookmark size={13} /> Bookmark at {clock(currentTime)}
+            <Clock size={13} /> At {clock(currentTime)}
           </button>
         ) : (
           <span />
@@ -229,6 +238,17 @@ function ReplyThread({ replies = [], posting, onReply }) {
   );
 }
 
+// Empty state for a list. A failed load (e.g. 404 "Video not found",
+// 403 "This course is locked for you") shows the server's message instead of
+// pretending the list is empty.
+function EmptyState({ status, error, children }) {
+  return (
+    <p className={`py-10 text-center text-sm ${status === "error" ? "text-red-600" : "text-ink-muted"}`}>
+      {status === "error" ? error || "Couldn't load this list." : children}
+    </p>
+  );
+}
+
 // Shared "Load more" control for the paginated lists.
 function LoadMore({ hasMore, loading, onClick }) {
   if (!hasMore) return null;
@@ -241,16 +261,16 @@ function LoadMore({ hasMore, loading, onClick }) {
   );
 }
 
-function CommentsTab({ courseId, currentTime, seekTo, user, canModerate }) {
+function CommentsTab({ courseId, videoId, currentTime, seekTo, user, canModerate }) {
   const dispatch = useAppDispatch();
-  const { comments, commentsStatus, posting, commentsHasMore, commentsStart, loadingMoreComments } =
+  const { comments, commentsStatus, posting, commentsHasMore, commentsStart, loadingMoreComments, error } =
     useAppSelector((s) => s.discussions);
 
   const post = (text, timestampSeconds) =>
-    dispatch(addComment({ courseId, text, timestampSeconds }));
+    dispatch(addComment({ courseId, videoId, text, timestampSeconds }));
 
   const loadMore = () =>
-    dispatch(fetchComments({ courseId, start: commentsStart, append: true }));
+    dispatch(fetchComments({ courseId, videoId, start: commentsStart, append: true }));
 
   return (
     <div className="flex h-full flex-col">
@@ -264,7 +284,7 @@ function CommentsTab({ courseId, currentTime, seekTo, user, canModerate }) {
         {commentsStatus === "loading" ? (
           <div className="flex justify-center py-8"><Spinner /></div>
         ) : comments.length === 0 ? (
-          <p className="py-10 text-center text-sm text-ink-muted">No comments yet.</p>
+          <EmptyState status={commentsStatus} error={error}>No comments on this recording yet.</EmptyState>
         ) : (
           <>
             {comments.map((c) => {
@@ -326,16 +346,16 @@ function CommentsTab({ courseId, currentTime, seekTo, user, canModerate }) {
   );
 }
 
-function QuestionsTab({ courseId, currentTime, seekTo, canModerate }) {
+function QuestionsTab({ courseId, videoId, currentTime, seekTo, canModerate }) {
   const dispatch = useAppDispatch();
-  const { questions, questionsStatus, posting, questionsHasMore, questionsStart, loadingMoreQuestions } =
+  const { questions, questionsStatus, posting, questionsHasMore, questionsStart, loadingMoreQuestions, error } =
     useAppSelector((s) => s.discussions);
 
   const ask = (body, timestampSeconds) =>
-    dispatch(askQuestion({ courseId, body, timestampSeconds }));
+    dispatch(askQuestion({ courseId, videoId, body, timestampSeconds }));
 
   const loadMore = () =>
-    dispatch(fetchQuestions({ courseId, start: questionsStart, append: true }));
+    dispatch(fetchQuestions({ courseId, videoId, start: questionsStart, append: true }));
 
   return (
     <div className="flex h-full flex-col">
@@ -344,7 +364,7 @@ function QuestionsTab({ courseId, currentTime, seekTo, canModerate }) {
         {questionsStatus === "loading" ? (
           <div className="flex justify-center py-8"><Spinner /></div>
         ) : questions.length === 0 ? (
-          <p className="py-10 text-center text-sm text-ink-muted">No questions yet.</p>
+          <EmptyState status={questionsStatus} error={error}>No questions on this recording yet.</EmptyState>
         ) : (
           <>
             {questions.map((q) => (
@@ -387,14 +407,17 @@ function QuestionsTab({ courseId, currentTime, seekTo, canModerate }) {
   );
 }
 
-function NotesTab({ courseId, currentTime, seekTo }) {
+function NotesTab({ courseId, videoId, currentTime, seekTo }) {
   const dispatch = useAppDispatch();
-  const { items, status, saving } = useAppSelector((s) => s.notes);
+  const { items, status, saving, hasMore, start, loadingMore, error } = useAppSelector((s) => s.notes);
   const [editing, setEditing] = useState(null);
   const [editText, setEditText] = useState("");
 
   const post = (text, timestampSeconds) =>
-    dispatch(addNote({ courseId, text, timestampSeconds }));
+    dispatch(addNote({ courseId, videoId, text, timestampSeconds }));
+
+  const loadMore = () =>
+    dispatch(fetchNotes({ courseId, videoId, start, append: true }));
 
   const saveEdit = (noteId) => {
     dispatch(updateNote({ noteId, text: editText })).then(() => setEditing(null));
@@ -407,11 +430,12 @@ function NotesTab({ courseId, currentTime, seekTo }) {
         {status === "loading" ? (
           <div className="flex justify-center py-8"><Spinner /></div>
         ) : items.length === 0 ? (
-          <p className="py-10 text-center text-sm text-ink-muted">
-            Your notes are private to you. Add one to get started.
-          </p>
+          <EmptyState status={status} error={error}>
+            Your notes on this recording are private to you. Add one to get started.
+          </EmptyState>
         ) : (
-          items.map((n) => (
+          <>
+          {items.map((n) => (
             <div key={n._id} className="rounded-xl border border-ink/8 bg-cream-100 p-3.5">
               <div className="mb-1 flex items-center gap-2">
                 <TimeChip seconds={n.timestampSeconds} onClick={() => seekTo?.(n.timestampSeconds)} />
@@ -452,7 +476,9 @@ function NotesTab({ courseId, currentTime, seekTo }) {
                 <p className="text-sm leading-relaxed text-ink-soft">{n.text}</p>
               )}
             </div>
-          ))
+          ))}
+          <LoadMore hasMore={hasMore} loading={loadingMore} onClick={loadMore} />
+          </>
         )}
       </div>
     </div>
