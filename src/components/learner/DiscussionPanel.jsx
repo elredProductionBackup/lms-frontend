@@ -298,7 +298,7 @@ function CommentsTab({ courseId, videoId, currentTime, seekTo, user, canModerate
                   }`}
                 >
                   <div className="flex gap-3">
-                    <Avatar name={name} size={30} className="mt-0.5" />
+                    <Avatar name={name} src={c.userId?.avatarUrl} size={30} className="mt-0.5" />
                     <div className="flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-ink">{name}</span>
@@ -375,7 +375,7 @@ function QuestionsTab({ courseId, videoId, currentTime, seekTo, canModerate }) {
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <Avatar name={displayName(q.askedBy)} size={26} />
+                  <Avatar name={displayName(q.askedBy)} src={q.askedBy?.avatarUrl} size={26} />
                   <span className="text-sm font-medium text-ink">{displayName(q.askedBy)}</span>
                   <TimeChip seconds={q.timestampSeconds} onClick={() => seekTo?.(q.timestampSeconds)} />
                   {q.isPinned && <PinnedTag />}

@@ -76,7 +76,10 @@ export function Spinner({ size = 20, className = "" }) {
 }
 
 export function Avatar({ name, src, size = 36, className = "" }) {
-  const url = src ? mediaUrl(src) : null;
+  // Only use the image when avatarUrl is a real, non-blank string; a missing
+  // key, null, "" or "   " all fall back to initials.
+  const cleanSrc = typeof src === "string" ? src.trim() : "";
+  const url = cleanSrc ? mediaUrl(cleanSrc) : null;
   // Track whether the image failed to load so we can fall back to initials.
   // Reset the error whenever the source changes (e.g. after an avatar upload)
   // so a fresh URL is always re-attempted instead of staying broken.
