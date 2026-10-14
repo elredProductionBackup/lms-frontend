@@ -31,11 +31,11 @@ function HomeInner() {
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-5 sm:py-10">
         <header className="mb-6 sm:mb-8">
           <h1 className="font-serif text-3xl text-ink sm:text-5xl">
-            Welcome back, {user?.name?.split(" ")[0] || "there"}
+            Welcome {user?.name?.split(" ")[0] || "there"}
           </h1>
-          <p className="mt-2 text-sm text-ink-muted sm:text-base">
+          {/* <p className="mt-2 text-sm text-ink-muted sm:text-base">
             Modules unlock inside their access window. Pick up where you left off.
-          </p>
+          </p> */}
         </header>
 
         {status === "loading" && catalog.length === 0 ? (

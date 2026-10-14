@@ -627,7 +627,7 @@ function NotesTab({ courseId, videoId, currentTime, seekTo, confirm }) {
           <div className="flex justify-center py-8"><Spinner /></div>
         ) : items.length === 0 ? (
           <EmptyState status={status} error={error}>
-            Your notes on this recording are private to you. Add one to get started.
+            Your notes on this module are private to you. Add one to get started.
           </EmptyState>
         ) : (
           <>
