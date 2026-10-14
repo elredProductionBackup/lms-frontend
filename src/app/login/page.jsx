@@ -122,12 +122,12 @@ export default function LoginPage() {
               >
                 Send code <ArrowRight size={16} />
               </Button>
-              <p className="mt-6 text-center text-sm text-ink-muted">
+              {/* <p className="mt-6 text-center text-sm text-ink-muted">
                 New here?{" "}
                 <Link href="/join" className="font-medium text-teal hover:underline">
                   Request access
                 </Link>
-              </p>
+              </p> */}
             </form>
           ) : (
             <form onSubmit={verify} className="animate-fade-in">
