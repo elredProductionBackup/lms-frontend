@@ -34,7 +34,7 @@ function HomeInner() {
             Welcome back, {user?.name?.split(" ")[0] || "there"}
           </h1>
           <p className="mt-2 text-sm text-ink-muted sm:text-base">
-            Recordings unlock inside their access window. Pick up where you left off.
+            Modules unlock inside their access window. Pick up where you left off.
           </p>
         </header>
 

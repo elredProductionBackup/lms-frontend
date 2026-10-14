@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  Upload, Trash2, Pencil, Check, Film, Loader2, Captions, CaptionsOff, RotateCcw,
+  Upload, Trash2, Pencil, Check, X, Film, Loader2, Captions, CaptionsOff, RotateCcw,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import {
@@ -20,6 +20,7 @@ import { pushToast } from "@/store/slices/uiSlice";
 import { Card, EmptyState } from "@/components/ui/Shell";
 import { Button, Badge } from "@/components/ui/Primitives";
 import { Input, Textarea } from "@/components/ui/Field";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { clock } from "@/lib/format";
 
 const STATUS_TONE = {
@@ -30,12 +31,15 @@ const STATUS_TONE = {
   failed: "archived",
 };
 
+const moduleName = (v, i) => v.title || `Module ${i + 1}`;
+
 export default function RecordingsTab({ course }) {
   const dispatch = useAppDispatch();
   const fileRef = useRef(null);
   const { uploading, uploadProgress } = useAppSelector((s) => s.videos);
   const statuses = useAppSelector((s) => s.videos.statuses);
   const [title, setTitle] = useState("");
+  const { confirm, dialog } = useConfirm();
   const courseId = course._id;
   const videos = course.videos || [];
 
@@ -75,21 +79,27 @@ export default function RecordingsTab({ course }) {
     e.target.value = "";
   };
 
-  const onDelete = async (videoId) => {
-    if (!confirm("Delete this recording? This cannot be undone.")) return;
-    const res = await dispatch(deleteVideo({ courseId, videoId }));
-    if (deleteVideo.fulfilled.match(res)) dispatch(pushToast("Recording deleted", "success"));
+  // The row disappears as soon as the delete succeeds (coursesSlice drops it
+  // from course.videos). If the server refuses, the popup shows why.
+  const onDelete = async (video, index) => {
+    const ok = await confirm({
+      title: "Delete this module?",
+      message: `"${moduleName(video, index)}" and its video will be removed for everyone, and learners' comments, questions and notes on it will no longer be reachable. This can't be undone.`,
+      confirmLabel: "Delete module",
+      action: () => dispatch(deleteVideo({ courseId, videoId: video._id })).unwrap(),
+    });
+    if (ok) dispatch(pushToast("Module deleted", "success"));
   };
 
   return (
     <div>
       <Card className="mb-5 p-5">
-        <h3 className="mb-3 font-serif text-lg text-ink">Add a recording</h3>
+        <h3 className="mb-3 font-serif text-lg text-ink">Add a module</h3>
         <div className="flex flex-col gap-3 sm:flex-row">
           <Input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Recording title (optional)"
+            placeholder="Module title (optional)"
             className="flex-1"
           />
           <input ref={fileRef} type="file" accept="video/*" hidden onChange={onUpload} />
@@ -126,22 +136,28 @@ export default function RecordingsTab({ course }) {
         <EmptyState icon={Film} title="No recordings yet" description="Upload a video to build out this session." />
       ) : (
         <div className="space-y-2">
-          {videos.map((v, i) => (
-            <VideoRow
-              key={v._id}
-              courseId={courseId}
-              video={{
-                ...v,
-                status: statuses[v._id]?.status || v.status,
-                captionsStatus:
-                  statuses[v._id]?.captionsStatus || v.captionsStatus,
-              }}
-              index={i}
-              onDelete={() => onDelete(v._id)}
-            />
-          ))}
+          {videos.map((v, i) => {
+            const live = statuses[v._id] || {};
+            return (
+              <VideoRow
+                key={v._id}
+                courseId={courseId}
+                video={{
+                  ...v,
+                  status: live.status || v.status,
+                  captionsStatus: live.captionsStatus || v.captionsStatus,
+                  // The status poll reports the duration once transcoding
+                  // finishes; use it so "duration pending" clears without a reload.
+                  durationSeconds: live.durationSeconds ?? v.durationSeconds,
+                }}
+                index={i}
+                onDelete={() => onDelete(v, i)}
+              />
+            );
+          })}
         </div>
       )}
+      {dialog}
     </div>
   );
 }
@@ -151,16 +167,42 @@ function VideoRow({ courseId, video, index, onDelete }) {
   const retrying = useAppSelector((s) => s.videos.retrying[video._id]);
   const [editing, setEditing] = useState(false);
   const [editingCaptions, setEditingCaptions] = useState(false);
-  const [name, setName] = useState(video.title || "");
+  const [name, setName] = useState("");
+  const [savingName, setSavingName] = useState(false);
   const transcoding = ["uploaded", "transcoding", "none"].includes(video.status);
   const failed = video.status === "failed";
   const captionsReady = video.captionsStatus === "ready";
 
+  // Always start editing from the current title, not whatever was typed last time.
+  const startEdit = () => {
+    setName(video.title || "");
+    setEditing(true);
+  };
+
+  const cancelEdit = () => setEditing(false);
+
   const save = async () => {
-    const res = await dispatch(renameVideo({ courseId, videoId: video._id, title: name }));
+    const title = name.trim();
+    if (!title || savingName) return;
+    if (title === (video.title || "")) return setEditing(false); // nothing changed
+    setSavingName(true);
+    const res = await dispatch(renameVideo({ courseId, videoId: video._id, title }));
+    setSavingName(false);
     if (renameVideo.fulfilled.match(res)) {
       dispatch(pushToast("Title updated", "success"));
       setEditing(false);
+    } else {
+      dispatch(pushToast(res.payload?.message || "Title wasn't updated. Try again.", "error"));
+    }
+  };
+
+  const onNameKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      save();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
     }
   };
 
@@ -176,17 +218,37 @@ function VideoRow({ courseId, video, index, onDelete }) {
   return (
     <Card className="px-5 py-3.5">
       <div className="flex items-center gap-4">
-        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-cream-200 text-ink-muted">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-cream-200 text-ink-muted">
           {transcoding ? <Loader2 size={18} className="animate-spin" /> : <Film size={18} />}
         </span>
         <div className="min-w-0 flex-1">
           {editing ? (
             <div className="flex items-center gap-2">
-              <Input value={name} onChange={(e) => setName(e.target.value)} className="max-w-xs" />
-              <Button size="sm" variant="teal" onClick={save}><Check size={14} /></Button>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={onNameKeyDown}
+                placeholder="Module title"
+                aria-label="Module title"
+                autoFocus
+                className="max-w-xs"
+              />
+              <Button
+                size="sm"
+                variant="teal"
+                onClick={save}
+                loading={savingName}
+                disabled={!name.trim()}
+                aria-label="Save title"
+              >
+                <Check size={14} />
+              </Button>
+              <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={savingName} aria-label="Cancel">
+                <X size={14} />
+              </Button>
             </div>
           ) : (
-            <p className="truncate font-medium text-ink">{video.title || `Recording ${index + 1}`}</p>
+            <p className="truncate font-medium text-ink">{moduleName(video, index)}</p>
           )}
           <p className="flex items-center gap-2 text-xs text-ink-muted">
             <span>
@@ -220,11 +282,11 @@ function VideoRow({ courseId, video, index, onDelete }) {
           </Button>
         )}
         {!editing && (
-          <button onClick={() => setEditing(true)} className="rounded-lg p-2 text-ink-muted hover:bg-ink/5 hover:text-ink" aria-label="Rename">
+          <button type="button" onClick={startEdit} className="rounded-lg p-2 text-ink-muted hover:bg-ink/5 hover:text-ink" aria-label="Rename module" title="Rename">
             <Pencil size={16} />
           </button>
         )}
-        <button onClick={onDelete} className="rounded-lg p-2 text-ink-muted hover:bg-red-50 hover:text-red-600" aria-label="Delete">
+        <button type="button" onClick={onDelete} className="rounded-lg p-2 text-ink-muted hover:bg-red-50 hover:text-red-600" aria-label="Delete module" title="Delete">
           <Trash2 size={16} />
         </button>
       </div>

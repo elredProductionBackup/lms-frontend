@@ -22,13 +22,25 @@ import RouteGuard from "@/components/auth/RouteGuard";
 import TopNav from "@/components/learner/TopNav";
 import VideoPlayer from "@/components/learner/VideoPlayer";
 import DiscussionPanel from "@/components/learner/DiscussionPanel";
-import { Spinner, Badge, Dot, Avatar } from "@/components/ui/Primitives";
+import { Spinner } from "@/components/ui/Primitives";
 import { clock } from "@/lib/format";
+
+// Moderation (pin / unpin / delete anyone's post) is allowed for an admin, or
+// for the author of THIS course only. Any other author is just a viewer here,
+// and the API answers their moderation calls with 403.
+function canModerateCourse(course, role, user) {
+  if (role === "admin") return true;
+  if (role !== "author" || !course) return false;
+  const myId = user?.id || user?._id;
+  const authorId = course.authorId?._id || course.authorId || course.author?.id;
+  return Boolean(myId && authorId) && String(myId) === String(authorId);
+}
 
 function PlayerInner() {
   const { id } = useParams();
   const dispatch = useAppDispatch();
   const { current, detailStatus } = useAppSelector((s) => s.courses);
+  const { role, user } = useAppSelector((s) => s.auth);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -104,6 +116,7 @@ function PlayerInner() {
   const videos = current.videos || [];
   const activeVideo = selectedVideo;
   const unlocked = !!current.unlocked;
+  const canModerate = canModerateCourse(current, role, user);
 
   // A seek requested from a discussion timestamp chip: hand it to the player,
   // which clamps it to already-watched content instead of poking the DOM.
@@ -168,17 +181,6 @@ function PlayerInner() {
           {/* Meta + video list */}
           <div className="min-w-0 lg:col-start-1 lg:row-start-2">
             <div>
-              {/* <div className="mb-2 flex items-center gap-3">
-                {unlocked ? (
-                  <Badge tone="available">
-                    <Dot tone="available" /> Available now
-                  </Badge>
-                ) : (
-                  <Badge tone="closed">
-                    <Dot tone="closed" /> Locked
-                  </Badge>
-                )}
-              </div> */}
               <h1 className="font-serif text-2xl leading-tight text-ink sm:text-3xl">
                 {current.title}
               </h1>
@@ -195,7 +197,7 @@ function PlayerInner() {
             {videos.length > 1 && (
               <div className="mt-8">
                 <h2 className="mb-3 font-serif text-lg text-ink">
-                  In this session · {videos.length} recordings
+                  In this session · {videos.length} modules
                 </h2>
                 <div className="space-y-2">
                   {videos.map((v, i) => {
@@ -204,6 +206,7 @@ function PlayerInner() {
                     return (
                       <button
                         key={v._id}
+                        type="button"
                         onClick={() => ready && unlocked && !active && selectVideo(v._id)}
                         disabled={!ready || !unlocked}
                         className={`flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition-colors sm:px-4 ${
@@ -252,6 +255,7 @@ function PlayerInner() {
               videoId={activeVideo?._id}
               currentTime={currentTime}
               seekTo={requestSeek}
+              canModerate={canModerate}
             />
           </aside>
         </div>

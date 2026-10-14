@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import { api } from "@/lib/api";
+import { renameVideo, deleteVideo } from "@/store/slices/videosSlice";
 
 // GET /api/courses?scope=catalog|manage
 export const fetchCourses = createAsyncThunk(
@@ -140,6 +141,18 @@ export const fetchCourseRoster = createAsyncThunk(
   }
 );
 
+// Apply a change to one course wherever this slice holds a copy of it: the
+// open course and the catalog / manage lists. Keeps every screen in step
+// without a refetch.
+function updateCourseEverywhere(s, courseId, change) {
+  if (s.current?._id === courseId) change(s.current);
+  [s.catalog, s.manage].forEach((list) =>
+    list.forEach((c) => {
+      if (c._id === courseId) change(c);
+    })
+  );
+}
+
 const slice = createSlice({
   name: "courses",
   initialState: {
@@ -217,6 +230,33 @@ const slice = createSlice({
 
     b.addCase(fetchCourseRoster.fulfilled, (s, a) => {
       s.roster = a.payload.users;
+    });
+
+    // ----- module (video) changes made from the Modules tab -----
+    // These thunks live in videosSlice, but the module list on screen is
+    // course.videos from this slice, so it has to be updated here too.
+    // Only the one field that changed is patched: the PUT/DELETE responses
+    // don't carry `unlocked` / `author`, so we never swap the whole course.
+
+    b.addCase(renameVideo.fulfilled, (s, a) => {
+      const { courseId, videoId, title } = a.meta.arg;
+      // Prefer the title the server saved (it may trim it), whatever shape
+      // the response has: the course, the video, or nothing useful.
+      const fromServer =
+        a.payload?.videos?.find?.((v) => v._id === videoId)?.title ??
+        (a.payload?._id === videoId ? a.payload.title : undefined);
+      const nextTitle = fromServer ?? title;
+      updateCourseEverywhere(s, courseId, (c) => {
+        const video = c.videos?.find((v) => v._id === videoId);
+        if (video) video.title = nextTitle;
+      });
+    });
+
+    b.addCase(deleteVideo.fulfilled, (s, a) => {
+      const { courseId, videoId } = a.meta.arg;
+      updateCourseEverywhere(s, courseId, (c) => {
+        if (c.videos) c.videos = c.videos.filter((v) => v._id !== videoId);
+      });
     });
   },
 });

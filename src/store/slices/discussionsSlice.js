@@ -34,6 +34,8 @@ const videoPath = (courseId, videoId, kind) =>
 // response must not land in the new recording's panel.
 const isCurrent = (s, a) => !!a.meta.arg?.videoId && a.meta.arg.videoId === s.videoId;
 
+const fail = (e) => ({ code: e.code, message: e.message });
+
 // ---- Comments ----
 
 // GET /api/courses/:id/videos/:videoId/comments?start=&offset=
@@ -46,7 +48,7 @@ export const fetchComments = createAsyncThunk(
       const items = data.comments || [];
       return { items, start, offset, append, hasMore: items.length === offset };
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -62,12 +64,12 @@ export const addComment = createAsyncThunk(
         timestampSeconds,
       });
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
 
-// DELETE /api/comments/:commentId
+// DELETE /api/comments/:commentId  (own comment, or a moderator)
 export const deleteComment = createAsyncThunk(
   "disc/comments/delete",
   async (commentId, { rejectWithValue }) => {
@@ -75,7 +77,7 @@ export const deleteComment = createAsyncThunk(
       await api.del(`/comments/${commentId}`);
       return commentId;
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -87,7 +89,7 @@ export const pinComment = createAsyncThunk(
     try {
       return await api.put(`/comments/${commentId}/pin`, null);
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -99,7 +101,7 @@ export const unpinComment = createAsyncThunk(
     try {
       return await api.put(`/comments/${commentId}/unpin`, null);
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -112,7 +114,22 @@ export const replyToComment = createAsyncThunk(
     try {
       return await api.post(`/comments/${commentId}/replies`, { body });
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
+    }
+  }
+);
+
+// PENDING BACKEND (FEATURES.deleteReplies):
+// DELETE /api/comments/:commentId/replies/:replyId  (reply's author, or a moderator)
+// Works whether the backend returns the full parent comment or just { ok: true }.
+export const deleteCommentReply = createAsyncThunk(
+  "disc/comments/replyDelete",
+  async ({ commentId, replyId }, { rejectWithValue }) => {
+    try {
+      const data = await api.del(`/comments/${commentId}/replies/${replyId}`);
+      return { parentId: commentId, replyId, doc: data?._id ? data : null };
+    } catch (e) {
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -129,7 +146,7 @@ export const fetchQuestions = createAsyncThunk(
       const items = data.questions || [];
       return { items, start, offset, append, hasMore: items.length === offset };
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -144,7 +161,7 @@ export const askQuestion = createAsyncThunk(
         timestampSeconds,
       });
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -157,7 +174,7 @@ export const fetchQuestionDetail = createAsyncThunk(
     try {
       return await api.get(`/questions/${questionId}`);
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -170,7 +187,7 @@ export const replyToQuestion = createAsyncThunk(
     try {
       return await api.post(`/questions/${questionId}/replies`, { body });
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -182,7 +199,7 @@ export const pinQuestion = createAsyncThunk(
     try {
       return await api.put(`/questions/${questionId}/pin`, null);
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -194,7 +211,35 @@ export const unpinQuestion = createAsyncThunk(
     try {
       return await api.put(`/questions/${questionId}/unpin`, null);
     } catch (e) {
-      return rejectWithValue({ code: e.code, message: e.message });
+      return rejectWithValue(fail(e));
+    }
+  }
+);
+
+// PENDING BACKEND (FEATURES.deleteQuestions):
+// DELETE /api/questions/:questionId  (question's author, or a moderator)
+export const deleteQuestion = createAsyncThunk(
+  "disc/questions/delete",
+  async (questionId, { rejectWithValue }) => {
+    try {
+      await api.del(`/questions/${questionId}`);
+      return questionId;
+    } catch (e) {
+      return rejectWithValue(fail(e));
+    }
+  }
+);
+
+// PENDING BACKEND (FEATURES.deleteReplies):
+// DELETE /api/questions/:questionId/replies/:replyId  (reply's author, or a moderator)
+export const deleteQuestionReply = createAsyncThunk(
+  "disc/questions/replyDelete",
+  async ({ questionId, replyId }, { rejectWithValue }) => {
+    try {
+      const data = await api.del(`/questions/${questionId}/replies/${replyId}`);
+      return { parentId: questionId, replyId, doc: data?._id ? data : null };
+    } catch (e) {
+      return rejectWithValue(fail(e));
     }
   }
 );
@@ -205,6 +250,15 @@ function upsertSorted(list, doc) {
   const i = list.findIndex((x) => x._id === doc._id);
   if (i >= 0) list[i] = doc;
   return sortPinnedFirst(list);
+}
+
+// After a reply delete: use the server's updated parent if it sent one,
+// otherwise drop the reply locally.
+function removeReply(list, { parentId, replyId, doc }) {
+  if (doc) return upsertSorted(list, doc);
+  const parent = list.find((x) => x._id === parentId);
+  if (parent) parent.replies = (parent.replies || []).filter((r) => r._id !== replyId);
+  return list;
 }
 
 const slice = createSlice({
@@ -295,8 +349,11 @@ const slice = createSlice({
         s.error = a.payload?.message;
       });
 
+    // Also step the page cursor back, otherwise "Load more" skips one comment.
     b.addCase(deleteComment.fulfilled, (s, a) => {
+      const before = s.comments.length;
       s.comments = s.comments.filter((c) => c._id !== a.payload);
+      if (s.comments.length < before) s.commentsStart = Math.max(0, s.commentsStart - 1);
     });
 
     [pinComment, unpinComment, replyToComment].forEach((t) => {
@@ -309,6 +366,10 @@ const slice = createSlice({
       b.addCase(t.rejected, (s, a) => {
         s.error = a.payload?.message;
       });
+    });
+
+    b.addCase(deleteCommentReply.fulfilled, (s, a) => {
+      s.comments = removeReply(s.comments, a.payload);
     });
 
     // ----- questions -----
@@ -364,6 +425,25 @@ const slice = createSlice({
       b.addCase(t.rejected, (s, a) => {
         s.error = a.payload?.message;
       });
+    });
+
+    b.addCase(deleteQuestion.fulfilled, (s, a) => {
+      const before = s.questions.length;
+      s.questions = s.questions.filter((q) => q._id !== a.payload);
+      if (s.questions.length < before) s.questionsStart = Math.max(0, s.questionsStart - 1);
+      if (s.activeQuestion?._id === a.payload) s.activeQuestion = null;
+    });
+
+    b.addCase(deleteQuestionReply.fulfilled, (s, a) => {
+      s.questions = removeReply(s.questions, a.payload);
+      if (s.activeQuestion?._id === a.payload.parentId) {
+        s.activeQuestion = a.payload.doc
+          ? a.payload.doc
+          : {
+              ...s.activeQuestion,
+              replies: (s.activeQuestion.replies || []).filter((r) => r._id !== a.payload.replyId),
+            };
+      }
     });
   },
 });

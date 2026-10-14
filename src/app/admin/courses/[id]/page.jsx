@@ -17,7 +17,7 @@ import RosterTab from "@/components/admin/RosterTab";
 export default function ManageCoursePage() {
   const { id } = useParams();
   const dispatch = useAppDispatch();
-  const { current, detailStatus } = useAppSelector((s) => s.courses);
+  const { current, detailStatus, error } = useAppSelector((s) => s.courses);
   const { role } = useAppSelector((s) => s.auth);
   const [tab, setTab] = useState("details");
 
@@ -31,12 +31,30 @@ export default function ManageCoursePage() {
 
   const tabs = [
     { value: "details", label: "Details" },
-    { value: "recordings", label: `Recordings${current ? ` (${(current.videos || []).length})` : ""}` },
+    { value: "recordings", label: `Modules${current ? ` (${(current.videos || []).length})` : ""}` },
     ...(role === "admin" ? [{ value: "subscriptions", label: "Subscriptions" }] : []),
     { value: "roster", label: "Roster" },
   ];
 
-  if (detailStatus === "loading" || !current) {
+  // Spinner only until THIS course is first loaded. A refetch (e.g. after an
+  // upload) keeps the page on screen instead of blanking it and remounting
+  // every tab, which threw away anything mid-edit.
+  const hasThisCourse = current && current._id === id;
+  if (!hasThisCourse && detailStatus === "error") {
+    return (
+      <div className="py-24 text-center">
+        <p className="text-sm text-red-600">{error || "This course couldn't be loaded."}</p>
+        <button
+          type="button"
+          onClick={() => dispatch(fetchCourse(id))}
+          className="mt-3 text-sm font-medium text-teal hover:underline"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (!hasThisCourse) {
     return <div className="flex justify-center py-24"><Spinner size={28} /></div>;
   }
 
@@ -52,6 +70,7 @@ export default function ManageCoursePage() {
       <div className="mb-6 flex items-center gap-3">
         <h1 className="font-serif text-3xl text-ink">{current.title}</h1>
         <Badge tone={current.status}>{current.status}</Badge>
+        {detailStatus === "loading" && <Spinner size={16} />}
       </div>
 
       <div className="mb-6">

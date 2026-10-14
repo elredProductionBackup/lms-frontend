@@ -58,7 +58,7 @@ export default function AdminCoursesPage() {
                     <Badge tone={c.status}>{c.status}</Badge>
                   </div>
                   <p className="mt-0.5 truncate text-sm text-ink-muted">
-                    {(c.videos || []).length} recordings
+                    {(c.videos || []).length} modules
                     {c.detailsHtml ? ` · ${plainText(c.detailsHtml, 60)}` : ""}
                   </p>
                 </div>
