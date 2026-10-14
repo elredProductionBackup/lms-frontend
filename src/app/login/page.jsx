@@ -154,16 +154,20 @@ export default function LoginPage() {
                     size={17}
                     className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-muted"
                   />
-                  <Input
-                    id="code"
-                    inputMode="numeric"
-                    autoFocus
-                    required
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    placeholder="123456"
-                    className="pl-10 font-mono tracking-widest"
-                  />
+                 <Input
+                  id="code"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  autoComplete="one-time-code"
+                  autoFocus
+                  required
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  placeholder="123456"
+                  className="pl-10 font-mono tracking-widest"
+                />
                 </div>
               </div>
               {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
