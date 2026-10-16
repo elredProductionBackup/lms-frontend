@@ -136,7 +136,37 @@ export const updateVideoCaptions = createAsyncThunk(
   }
 );
 
-// GET /api/courses/:id/videos/:videoId/status
+// Same image rules as the course cover: PNG/JPG/JPEG/WEBP/GIF, max 5MB.
+export const VIDEO_THUMB = {
+  maxBytes: 5 * 1024 * 1024,
+  types: ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"],
+  accept: "image/png,image/jpeg,image/webp,image/gif",
+};
+
+export function videoThumbError(file) {
+  if (!file) return "Choose an image";
+  if (!VIDEO_THUMB.types.includes(file.type)) return "Use a PNG, JPG, WEBP or GIF image";
+  if (file.size > VIDEO_THUMB.maxBytes) return "Image must be 5 MB or smaller";
+  return null;
+}
+
+// POST /api/courses/:id/videos/:videoId/thumbnail  (multipart "file")
+// -> { videoId, thumbnailUrl }. Works at any video status; uploading again
+// replaces it. A course can't be published until every video has one.
+export const uploadVideoThumbnail = createAsyncThunk(
+  "videos/thumbnail",
+  async ({ courseId, videoId, file }, { rejectWithValue }) => {
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      return await api.form(`/courses/${courseId}/videos/${videoId}/thumbnail`, fd);
+    } catch (e) {
+      return rejectWithValue({ code: e.code, message: e.message });
+    }
+  }
+);
+
+// GET /api/courses/:id/videos/:videoId/status  (now includes thumbnailUrl)
 export const fetchVideoStatus = createAsyncThunk(
   "videos/status",
   async ({ courseId, videoId }, { rejectWithValue }) => {
@@ -230,6 +260,7 @@ const slice = createSlice({
     uploadProgress: null, // 0-100 while uploading, null otherwise
     lastUploaded: null,
     retrying: {}, // videoId -> bool
+    thumbUploading: {}, // videoId -> bool
   },
   reducers: {
     clearSession(s) {
@@ -274,6 +305,18 @@ const slice = createSlice({
     });
     b.addCase(retryVideo.rejected, (s, a) => {
       s.retrying[a.meta.arg.videoId] = false;
+    });
+
+    b.addCase(uploadVideoThumbnail.pending, (s, a) => {
+      s.thumbUploading[a.meta.arg.videoId] = true;
+    });
+    b.addCase(uploadVideoThumbnail.fulfilled, (s, a) => {
+      const videoId = a.payload?.videoId || a.meta.arg.videoId;
+      s.thumbUploading[a.meta.arg.videoId] = false;
+      if (s.statuses[videoId]) s.statuses[videoId].thumbnailUrl = a.payload?.thumbnailUrl ?? null;
+    });
+    b.addCase(uploadVideoThumbnail.rejected, (s, a) => {
+      s.thumbUploading[a.meta.arg.videoId] = false;
     });
 
     b.addCase(fetchVideoStatus.fulfilled, (s, a) => {

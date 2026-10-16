@@ -6,6 +6,7 @@ import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { fetchCourses } from "@/store/slices/coursesSlice";
 import RouteGuard from "@/components/auth/RouteGuard";
 import TopNav from "@/components/learner/TopNav";
+import SiteFooter from "@/components/learner/SiteFooter";
 import FeaturedCard from "@/components/learner/FeaturedCard";
 import SessionCard from "@/components/learner/SessionCard";
 import { EmptyState } from "@/components/ui/Shell";
@@ -26,9 +27,9 @@ function HomeInner() {
   );
 
   return (
-    <div className="min-h-screen">
+    <div className="flex min-h-screen flex-col">
       <TopNav />
-      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-5 sm:py-10">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-5 sm:py-10">
         <header className="mb-6 sm:mb-8">
           <h1 className="font-serif text-3xl text-ink sm:text-5xl">
             Welcome {user?.name?.split(" ")[0] || "there"}
@@ -64,6 +65,7 @@ function HomeInner() {
           </>
         )}
       </main>
+      <SiteFooter />
     </div>
   );
 }

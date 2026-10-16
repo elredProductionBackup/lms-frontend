@@ -1,6 +1,6 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import { api } from "@/lib/api";
-import { renameVideo, deleteVideo } from "@/store/slices/videosSlice";
+import { renameVideo, deleteVideo, uploadVideoThumbnail } from "@/store/slices/videosSlice";
 
 // GET /api/courses?scope=catalog|manage
 export const fetchCourses = createAsyncThunk(
@@ -249,6 +249,15 @@ const slice = createSlice({
       updateCourseEverywhere(s, courseId, (c) => {
         const video = c.videos?.find((v) => v._id === videoId);
         if (video) video.title = nextTitle;
+      });
+    });
+
+    b.addCase(uploadVideoThumbnail.fulfilled, (s, a) => {
+      const { courseId, videoId } = a.meta.arg;
+      const url = a.payload?.thumbnailUrl ?? null;
+      updateCourseEverywhere(s, courseId, (c) => {
+        const video = c.videos?.find((v) => v._id === videoId);
+        if (video) video.thumbnailUrl = url;
       });
     });
 

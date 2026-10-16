@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Upload, Trash2, Pencil, Check, X, Film, Loader2, Captions, CaptionsOff, RotateCcw,
+  ImagePlus, ImageOff,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import {
@@ -14,6 +15,9 @@ import {
   setUploadProgress,
   fetchVideoCaptions,
   updateVideoCaptions,
+  uploadVideoThumbnail,
+  videoThumbError,
+  VIDEO_THUMB,
 } from "@/store/slices/videosSlice";
 import { fetchCourse } from "@/store/slices/coursesSlice";
 import { pushToast } from "@/store/slices/uiSlice";
@@ -22,6 +26,7 @@ import { Button, Badge } from "@/components/ui/Primitives";
 import { Input, Textarea } from "@/components/ui/Field";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { clock } from "@/lib/format";
+import { mediaUrl } from "@/lib/api";
 
 const STATUS_TONE = {
   ready: "published",
@@ -42,6 +47,7 @@ export default function RecordingsTab({ course }) {
   const { confirm, dialog } = useConfirm();
   const courseId = course._id;
   const videos = course.videos || [];
+  const missingThumbs = videos.filter((v) => !(v.thumbnailUrl || statuses[v._id]?.thumbnailUrl)).length;
 
   // Poll transcoding videos until ready/failed
   useEffect(() => {
@@ -132,6 +138,21 @@ export default function RecordingsTab({ course }) {
         </p>
       </Card>
 
+      {missingThumbs > 0 && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-teal/25 bg-teal/5 px-4 py-3 text-sm text-ink">
+          <ImageOff size={18} className="mt-0.5 shrink-0 text-teal" />
+          <p>
+            <span className="font-medium">
+              {missingThumbs === 1 ? "1 module needs" : `${missingThumbs} modules need`} a thumbnail.
+            </span>{" "}
+            <span className="text-ink-soft">
+              Learners see it before the video plays, and the course can&apos;t be published until
+              every module has one. Click a module&apos;s image box to add it.
+            </span>
+          </p>
+        </div>
+      )}
+
       {videos.length === 0 ? (
         <EmptyState icon={Film} title="No recordings yet" description="Upload a video to build out this session." />
       ) : (
@@ -149,6 +170,7 @@ export default function RecordingsTab({ course }) {
                   // The status poll reports the duration once transcoding
                   // finishes; use it so "duration pending" clears without a reload.
                   durationSeconds: live.durationSeconds ?? v.durationSeconds,
+                  thumbnailUrl: v.thumbnailUrl ?? live.thumbnailUrl ?? null,
                 }}
                 index={i}
                 onDelete={() => onDelete(v, i)}
@@ -218,9 +240,7 @@ function VideoRow({ courseId, video, index, onDelete }) {
   return (
     <Card className="px-5 py-3.5">
       <div className="flex items-center gap-4">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-cream-200 text-ink-muted">
-          {transcoding ? <Loader2 size={18} className="animate-spin" /> : <Film size={18} />}
-        </span>
+        <VideoThumbTile courseId={courseId} video={video} transcoding={transcoding} />
         <div className="min-w-0 flex-1">
           {editing ? (
             <div className="flex items-center gap-2">
@@ -250,10 +270,15 @@ function VideoRow({ courseId, video, index, onDelete }) {
           ) : (
             <p className="truncate font-medium text-ink">{moduleName(video, index)}</p>
           )}
-          <p className="flex items-center gap-2 text-xs text-ink-muted">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-ink-muted">
             <span>
               {video.durationSeconds ? clock(video.durationSeconds) : "duration pending"}
             </span>
+            {!video.thumbnailUrl && (
+              <span className="inline-flex items-center gap-1 font-medium text-teal">
+                <ImageOff size={13} /> Thumbnail needed
+              </span>
+            )}
             {captionsReady && (
               <span className="inline-flex items-center gap-1 text-available">
                 <Captions size={13} /> Captions
@@ -299,6 +324,85 @@ function VideoRow({ courseId, video, index, onDelete }) {
         />
       )}
     </Card>
+  );
+}
+
+// 16:9 thumbnail tile at the start of each module row. Click to add or replace
+// the module's own thumbnail (separate from the course cover). Allowed at any
+// status, so it can be set while the video is still transcoding.
+function VideoThumbTile({ courseId, video, transcoding }) {
+  const dispatch = useAppDispatch();
+  const inputRef = useRef(null);
+  const uploading = useAppSelector((s) => s.videos.thumbUploading[video._id]);
+  const [failed, setFailed] = useState(false);
+  const url = video.thumbnailUrl ? mediaUrl(video.thumbnailUrl) : null;
+
+  useEffect(() => setFailed(false), [url]);
+
+  const onPick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow picking the same file again after an error
+    if (!file) return;
+    const problem = videoThumbError(file);
+    if (problem) {
+      dispatch(pushToast(problem, "error"));
+      return;
+    }
+    const res = await dispatch(uploadVideoThumbnail({ courseId, videoId: video._id, file }));
+    if (uploadVideoThumbnail.fulfilled.match(res)) {
+      dispatch(pushToast(url ? "Thumbnail replaced" : "Thumbnail added", "success"));
+    } else {
+      dispatch(pushToast(res.payload?.message || "Thumbnail wasn't uploaded. Try again.", "error"));
+    }
+  };
+
+  const showImage = url && !failed;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => !uploading && inputRef.current?.click()}
+        disabled={uploading}
+        aria-label={showImage ? "Replace module thumbnail" : "Add module thumbnail"}
+        title={showImage ? "Replace thumbnail" : "Add thumbnail"}
+        className={`group relative flex h-[54px] w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg ${
+          showImage
+            ? "bg-ink"
+            : "border border-dashed border-teal/50 bg-teal/5 text-teal hover:bg-teal/10"
+        }`}
+      >
+        {showImage ? (
+          <>
+            <img
+              src={url}
+              alt=""
+              onError={() => setFailed(true)}
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/55 text-[11px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+              Replace
+            </span>
+          </>
+        ) : (
+          <span className="flex flex-col items-center gap-0.5">
+            <ImagePlus size={16} />
+            <span className="text-[10px] font-medium leading-none">Add thumbnail</span>
+          </span>
+        )}
+        {transcoding && !uploading && (
+          <span className="absolute bottom-1 right-1 rounded-full bg-black/60 p-0.5 text-white" title="Transcoding">
+            <Loader2 size={10} className="animate-spin" />
+          </span>
+        )}
+        {uploading && (
+          <span className="absolute inset-0 flex items-center justify-center bg-black/55 text-white">
+            <Loader2 size={18} className="animate-spin" />
+          </span>
+        )}
+      </button>
+      <input ref={inputRef} type="file" accept={VIDEO_THUMB.accept} hidden onChange={onPick} />
+    </>
   );
 }
 

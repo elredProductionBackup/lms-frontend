@@ -151,8 +151,8 @@ function AddMemberModal({ open, onClose, mutating, error }) {
             <option value="admin">Admin</option>
           </Select>
         </Fieldset>
-        <Fieldset label="Name" hint="optional">
-          <Input value={form.name} onChange={set("name")} />
+        <Fieldset label="Display name" hint="new people only">
+          <Input maxLength={100} value={form.name} onChange={set("name")} placeholder="e.g. Asha Verma" />
         </Fieldset>
         <Fieldset label="Bio" hint="optional, HTML allowed">
           <Textarea rows={3} value={form.aboutHtml} onChange={set("aboutHtml")} />

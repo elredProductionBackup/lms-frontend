@@ -5,7 +5,6 @@ import {
   Clock,
   Send,
   Trash2,
-  CornerDownRight,
   Pencil,
   Check,
   X,
@@ -43,8 +42,8 @@ import { Tabs } from "@/components/ui/Shell";
 import { Button, Avatar, Spinner } from "@/components/ui/Primitives";
 import { Textarea } from "@/components/ui/Field";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
-import { FEATURES } from "@/lib/features";
 import { clock, formatDate } from "@/lib/format";
+import { isSameUser } from "@/lib/identity";
 
 // Falls back to a capitalized email handle when the user has no name.
 function displayName(u) {
@@ -57,14 +56,21 @@ function displayName(u) {
   return "";
 }
 
-// A user reference may arrive populated ({ _id, name }) or as a bare id.
-const idOf = (ref) => (ref && typeof ref === "object" ? ref._id || ref.id : ref) || null;
 
-const TABS = [
-  { value: "comments", label: "Comments" },
-  { value: "questions", label: "Questions" },
-  { value: "notes", label: "My notes" },
-];
+// Tab label with the recording's total beside it ("Comments 12"). The count
+// only appears once the API has sent one; notes never get a total.
+function TabLabel({ text, count }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {text}
+      {count != null && (
+        <span className="min-w-[1.25rem] rounded-full bg-ink/[0.07] px-1.5 py-px text-center text-[11px] font-semibold tabular-nums leading-4">
+          {count > 999 ? "999+" : count}
+        </span>
+      )}
+    </span>
+  );
+}
 
 // Runs a thunk, toasts the server's message on failure, resolves true/false.
 function useRun() {
@@ -95,17 +101,25 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 export default function DiscussionPanel({ courseId, videoId, currentTime, seekTo, canModerate = false }) {
   const [tab, setTab] = useState("comments");
   const { user } = useAppSelector((s) => s.auth);
+  const { commentsTotal, questionsTotal } = useAppSelector((s) => s.discussions);
+
+  const tabs = [
+    { value: "comments", label: <TabLabel text="Comments" count={commentsTotal} /> },
+    { value: "questions", label: <TabLabel text="Q&A" count={questionsTotal} /> },
+    { value: "notes", label: "My notes" },
+  ];
   const { confirm, dialog } = useConfirm();
 
-  const myId = user?.id || user?._id || null;
-  const isMine = (ref) => Boolean(myId) && String(idOf(ref)) === String(myId);
+  // Matches on any id field or the email, so a learner always sees Delete on
+  // their own comments, questions and replies.
+  const isMine = (ref) => isSameUser(user, ref);
 
   const shared = { courseId, videoId, currentTime, seekTo, canModerate, isMine, confirm };
 
   return (
     <div className="flex h-full flex-col rounded-card border border-ink/8 bg-cream-50 shadow-soft">
       <div className="px-4 pt-1">
-        <Tabs tabs={TABS} active={tab} onChange={setTab} />
+        <Tabs tabs={tabs} active={tab} onChange={setTab} />
       </div>
       <div className="flex-1 overflow-hidden p-4">
         {!videoId ? (
@@ -245,6 +259,8 @@ function DeleteButton({ onClick, label, size = 15 }) {
 // with a slightly larger hit area for touch.
 const actionLink =
   "inline-flex items-center gap-1.5 rounded-md py-1 text-xs font-medium text-teal transition-colors hover:text-teal-dark focus:outline-none focus-visible:ring-2 focus-visible:ring-teal/40";
+const deleteLink =
+  "inline-flex items-center gap-1.5 rounded-md py-1 text-xs font-medium text-ink-muted transition-colors hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300";
 
 // Renders an existing reply list plus an inline reply composer. Replies are
 // open to any signed-in, course-unlocked user for both comments and questions.
@@ -259,6 +275,8 @@ function ReplyThread({
   onDeleteReply,
   collapsedCount = 1,
   noun = ["reply", "replies"],
+  onDeleteParent, // set when the viewer may delete the comment/question itself
+  parentNoun = "comment",
 }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -284,22 +302,27 @@ function ReplyThread({
   return (
     <div className="mt-3">
       {visible.map((r) => (
-        <div key={r._id} className="mt-2 flex gap-2 border-l-2 border-teal/30 pl-3">
-          <CornerDownRight size={14} className="mt-1 shrink-0 text-teal" />
+        <div key={r._id} className="mt-2 flex gap-2 border-l-2 border-ink/10 pl-3">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <Avatar name={displayName(r.by)} src={r.by?.avatarUrl} size={20} />
               <span className="text-xs font-medium text-ink">{displayName(r.by)}</span>
               {r.createdAt && (
                 <span className="text-[11px] text-ink-muted">{formatDate(r.createdAt)}</span>
               )}
             </div>
-            <p className="break-words text-sm text-ink-soft">{r.body}</p>
+            <p className="mt-0.5 break-words text-sm text-ink-soft">{r.body}</p>
+            {canDeleteReply?.(r) && (
+              <button
+                type="button"
+                onClick={() => onDeleteReply(r)}
+                className="mt-1 inline-flex items-center gap-1 rounded-md py-0.5 text-[11px] font-medium text-ink-muted transition-colors hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+                aria-label={`Delete ${noun[0]}`}
+              >
+                <Trash2 size={12} aria-hidden="true" /> Delete
+              </button>
+            )}
           </div>
-          {canDeleteReply?.(r) && (
-            <span className="shrink-0 pt-0.5">
-              <DeleteButton size={13} label="Delete reply" onClick={() => onDeleteReply(r)} />
-            </span>
-          )}
         </div>
       ))}
 
@@ -329,6 +352,16 @@ function ReplyThread({
           {!open && (
             <button type="button" onClick={() => setOpen(true)} className={actionLink}>
               <ReplyIcon size={14} aria-hidden="true" /> Reply
+            </button>
+          )}
+          {onDeleteParent && (
+            <button
+              type="button"
+              onClick={onDeleteParent}
+              className={deleteLink}
+              aria-label={`Delete this ${parentNoun}`}
+            >
+              <Trash2 size={13} aria-hidden="true" /> Delete
             </button>
           )}
         </div>
@@ -374,10 +407,9 @@ function LoadMore({ hasMore, loading, onClick }) {
   );
 }
 
-// Who may delete a reply: its writer, or a moderator. Hidden until the
-// backend ships the reply delete routes (see lib/features.js).
-const replyDeleter = (isMine, canModerate) => (r) =>
-  FEATURES.deleteReplies && (isMine(r.by) || canModerate);
+// Who may delete a comment, question or reply: whoever wrote it, this course's
+// author, or an admin (canModerate covers the last two). Anyone else gets 403.
+const replyDeleter = (isMine, canModerate) => (r) => isMine(r.by) || canModerate;
 
 function CommentsTab({ courseId, videoId, currentTime, seekTo, canModerate, isMine, confirm }) {
   const dispatch = useAppDispatch();
@@ -426,7 +458,7 @@ function CommentsTab({ courseId, videoId, currentTime, seekTo, canModerate, isMi
         {commentsStatus === "loading" ? (
           <div className="flex justify-center py-8"><Spinner /></div>
         ) : comments.length === 0 ? (
-          <EmptyState status={commentsStatus} error={error}>No comments on this recording yet.</EmptyState>
+          <EmptyState status={commentsStatus} error={error}>Your comments on this module will be visible to the public. Share your thoughts to get started.</EmptyState>
         ) : (
           <>
             {comments.map((c) => {
@@ -449,18 +481,15 @@ function CommentsTab({ courseId, videoId, currentTime, seekTo, canModerate, isMi
                       </div>
                       <p className="mt-0.5 break-words text-sm leading-relaxed text-ink-soft">{c.text}</p>
                     </div>
-                    <div className="flex items-start gap-2">
-                      {canModerate && (
+                    {canModerate && (
+                      <div className="flex items-start">
                         <PinToggle
                           pinned={c.isPinned}
                           onPin={() => run(pinComment(c._id), "Comment wasn't pinned. Try again.")}
                           onUnpin={() => run(unpinComment(c._id), "Comment wasn't unpinned. Try again.")}
                         />
-                      )}
-                      {(isMine(c.userId) || canModerate) && (
-                        <DeleteButton label="Delete comment" onClick={() => removeComment(c)} />
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="pl-[42px]">
@@ -471,6 +500,10 @@ function CommentsTab({ courseId, videoId, currentTime, seekTo, canModerate, isMi
                       }
                       canDeleteReply={replyDeleter(isMine, canModerate)}
                       onDeleteReply={removeReply(c)}
+                      onDeleteParent={
+                        isMine(c.userId) || canModerate ? () => removeComment(c) : undefined
+                      }
+                      parentNoun="comment"
                     />
                   </div>
                 </div>
@@ -526,12 +559,11 @@ function QuestionsTab({ courseId, videoId, currentTime, seekTo, canModerate, isM
         {questionsStatus === "loading" ? (
           <div className="flex justify-center py-8"><Spinner /></div>
         ) : questions.length === 0 ? (
-          <EmptyState status={questionsStatus} error={error}>No questions on this recording yet.</EmptyState>
+          <EmptyState status={questionsStatus} error={error}>Your questions and answers are public. Participate in the discussion by posting a question or sharing an answer.</EmptyState>
         ) : (
           <>
             {questions.map((q) => {
-              // Own question or moderator. Hidden until DELETE /questions/:id ships.
-              const canDelete = FEATURES.deleteQuestions && (isMine(q.askedBy) || canModerate);
+              const canDelete = isMine(q.askedBy) || canModerate;
               return (
                 <div
                   key={q._id}
@@ -544,18 +576,13 @@ function QuestionsTab({ courseId, videoId, currentTime, seekTo, canModerate, isM
                     <span className="text-sm font-medium text-ink">{displayName(q.askedBy)}</span>
                     <TimeChip seconds={q.timestampSeconds} onClick={() => seekTo?.(q.timestampSeconds)} />
                     {q.isPinned && <PinnedTag />}
-                    {(canModerate || canDelete) && (
-                      <span className="ml-auto flex items-center gap-2">
-                        {canModerate && (
-                          <PinToggle
-                            pinned={q.isPinned}
-                            onPin={() => run(pinQuestion(q._id), "Question wasn't pinned. Try again.")}
-                            onUnpin={() => run(unpinQuestion(q._id), "Question wasn't unpinned. Try again.")}
-                          />
-                        )}
-                        {canDelete && (
-                          <DeleteButton label="Delete question" onClick={() => removeQuestion(q)} />
-                        )}
+                    {canModerate && (
+                      <span className="ml-auto flex items-center">
+                        <PinToggle
+                          pinned={q.isPinned}
+                          onPin={() => run(pinQuestion(q._id), "Question wasn't pinned. Try again.")}
+                          onUnpin={() => run(unpinQuestion(q._id), "Question wasn't unpinned. Try again.")}
+                        />
                       </span>
                     )}
                   </div>
@@ -570,6 +597,8 @@ function QuestionsTab({ courseId, videoId, currentTime, seekTo, canModerate, isM
                     canDeleteReply={replyDeleter(isMine, canModerate)}
                     onDeleteReply={removeReply(q)}
                     noun={["answer", "answers"]}
+                    onDeleteParent={canDelete ? () => removeQuestion(q) : undefined}
+                    parentNoun="question"
                   />
                 </div>
               );

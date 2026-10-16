@@ -30,9 +30,67 @@ stream cookie work (see *Video streaming* below). Change the URL here if it rota
 everything else works out of the box.
 
 ### Signing in
-Auth is passwordless OTP. Enter an email on `/login` → the backend emails a code
-(in non-production it also echoes a `devOtp`, which the UI pre-fills for you) →
-verify to start a session. New users request access at `/join`.
+Sign-in is **invite-only**: admins, authors, and learners holding an active seat.
+Anyone else gets `403 LOGIN_NOT_ALLOWED` and no account is created.
+
+- **Email code:** enter an email on `/login` → the backend emails a code (in
+  non-production it also echoes a `devOtp`, which the UI pre-fills) → verify.
+- **Google:** set `NEXT_PUBLIC_GOOGLE_CLIENT_ID` in `.env.local` to the same OAuth
+  Web client ID the backend uses (`LMS_GOOGLE_CLIENT_ID`). Add every front-end
+  origin (localhost, pretest, prod) to that client's *Authorized JavaScript
+  origins*. With the variable empty, the Google button is hidden.
+
+**"Access blocked: Authorization Error · no registered origin · 401 invalid_client"**
+comes from Google, not this app: the page's origin isn't on the OAuth client.
+In Google Cloud Console → APIs & Services → Credentials → your *Web application*
+OAuth client → **Authorized JavaScript origins**, add the exact origin you open
+the app on (scheme + host + port, no path, no trailing slash), e.g.
+`http://localhost:3000` **and** `http://localhost`, plus each deployed origin.
+`127.0.0.1` and `localhost` are different origins. Saving can take a few minutes
+to apply. The client ID in `.env.local` must be that client's ID, and the dev
+server must be restarted after changing it (`NEXT_PUBLIC_*` is baked in at build).
+
+### Branding & footer
+The "Learning" lockup beside the TPN logo is `components/ui/BrandMark.jsx`. Footer
+links, contact details and socials live in `src/lib/site.js`; empty values are
+hidden.
+
+### Realtime
+`hooks/useCourseRealtime.js` connects to the backend's Socket.io at
+`/lms-socket.io` with the Bearer token (`handshake.auth.token`), emits
+`join:course` on every connect and `leave:course` on exit, and applies
+`comment:*` / `question:*` events for the recording on screen. Own posts and
+deletes are de-duplicated against their echo. The socket goes straight to the
+backend origin (`NEXT_PUBLIC_SOCKET_URL`, else the origin of
+`NEXT_PUBLIC_API_BASE_URL`), so the backend must allow this front-end origin in
+its Socket.io CORS settings.
+
+### People's display names
+One name per person: their profile `name`. An admin can give it only when
+their call creates the account: the seat form sends
+`POST /subscriptions/:id/seats { email, displayName }`, and `POST /members`
+takes `name`. For an existing account the name is ignored (the response's
+`user.name` / `name` says which name was kept, and the UI says so). After
+that only the person can change it, on Profile; admin screens show names
+read-only. Seat lists read `seat.user` (`userExists`, `name`, `avatarUrl`).
+Subscriptions have no display name.
+
+### Course access: `unlocked` vs `enrolled`
+`unlocked` = the access window is open, so the player works. `enrolled` = on
+the course and not removed, so comments, Q&A, notes, bookmarks and live
+updates work. Enrolled with the window closed shows "Your access has ended"
+on the player and keeps the rest of the page. Not enrolled hides the
+discussion tabs. A 403 from stream-session or a heartbeat stops playback and
+re-reads the course.
+
+### Thumbnails & posters
+The player, module list and session cards try images in order: the module's
+own `thumbnailUrl`, then the course cover, then `public/video-poster.svg`
+(`components/learner/Poster.jsx`). If one fails to load, the next is used. The
+player draws the poster as its own `<img>` rather than `<video poster>`:
+the video element carries `crossOrigin="use-credentials"` for the stream
+cookie, and Chrome applies that to the poster too, so CDN/S3 images without
+CORS headers would otherwise show a black frame.
 
 ## Architecture
 
@@ -104,7 +162,7 @@ All 58 documented endpoints are wired into slices:
 | Courses | list (catalog/manage/public), get, create, update, thumbnail, images, publish, archive, roster | `coursesSlice` · `/home`, `/admin/courses` |
 | Subscriptions & Enrollments | create, list w/ seat progress, update, assign/revoke seat, enrollment window | `subscriptionsSlice` · course manager tabs |
 | Video streaming | upload, status, rename, delete, stream-session, heartbeat, progress | `videosSlice` · player + Recordings tab |
-| Discussions | comments list/add/delete, questions list/ask/detail/reply | `discussionsSlice` · player sidebar |
+| Discussions | comments & questions list (with `total`)/add/delete, reply + reply delete, pin | `discussionsSlice` · player sidebar |
 | Notes | list/add/update/delete | `notesSlice` · player sidebar |
 | Admin & Audit | overview, audit log, distinct actions | `adminSlice` · `/admin`, `/admin/audit-log` |
 

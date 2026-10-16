@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
-import { ImagePlus, Save, Send, Archive, X, ImageIcon } from "lucide-react";
+import { ImagePlus, Save, Send, Archive, X, ImageIcon, ImageOff } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import {
   updateCourse,
@@ -17,7 +17,10 @@ import { Button, Badge } from "@/components/ui/Primitives";
 import { Input, Textarea, Fieldset } from "@/components/ui/Field";
 import { mediaUrl } from "@/lib/api";
 
-export default function DetailsTab({ course }) {
+// Publishing is refused (400 VIDEO_THUMBNAIL_MISSING) while any module has no
+// thumbnail, so we check first and point at the modules that need one. The
+// server stays the authority: its message is shown if it still says no.
+export default function DetailsTab({ course, onGoToModules }) {
   const dispatch = useAppDispatch();
   const thumbRef = useRef(null);
   const galleryRef = useRef(null);
@@ -40,7 +43,7 @@ export default function DetailsTab({ course }) {
     const file = e.target.files?.[0];
     if (!file) return;
     const res = await dispatch(uploadThumbnail({ id: courseId, file }));
-    if (uploadThumbnail.fulfilled.match(res)) dispatch(pushToast("Thumbnail updated", "success"));
+    if (uploadThumbnail.fulfilled.match(res)) dispatch(pushToast("Course cover updated", "success"));
     e.target.value = "";
   };
 
@@ -52,9 +55,17 @@ export default function DetailsTab({ course }) {
     e.target.value = "";
   };
 
+  const missingThumbs = (course.videos || [])
+    .map((v, i) => ({ ...v, label: v.title || `Module ${i + 1}` }))
+    .filter((v) => !v.thumbnailUrl);
+
   const publish = async () => {
     const res = await dispatch(publishCourse(courseId));
-    if (publishCourse.fulfilled.match(res)) dispatch(pushToast("Course published", "success"));
+    if (publishCourse.fulfilled.match(res)) {
+      dispatch(pushToast("Course published", "success"));
+    } else {
+      dispatch(pushToast(res.payload?.message || "Course wasn't published. Try again.", "error"));
+    }
   };
 
   const archive = async () => {
@@ -86,10 +97,10 @@ export default function DetailsTab({ course }) {
       </Card>
 
       <Card className="p-6">
-        <h3 className="mb-4 font-serif text-lg text-ink">Thumbnail & gallery</h3>
+        <h3 className="mb-4 font-serif text-lg text-ink">Cover & gallery</h3>
         <div className="flex flex-wrap items-start gap-4">
           <div>
-            <p className="mb-2 text-xs uppercase tracking-wide text-ink-muted">Thumbnail</p>
+            <p className="mb-2 text-xs uppercase tracking-wide text-ink-muted">Course cover</p>
             <button
               onClick={() => thumbRef.current?.click()}
               className="group relative flex h-28 w-44 items-center justify-center overflow-hidden rounded-xl border border-dashed border-ink/20 bg-cream-100"
@@ -99,7 +110,7 @@ export default function DetailsTab({ course }) {
               ) : (
                 <span className="flex flex-col items-center gap-1 text-ink-muted">
                   <ImageIcon size={22} strokeWidth={1.5} />
-                  <span className="text-xs">Add thumbnail</span>
+                  <span className="text-xs">Add cover</span>
                 </span>
               )}
             </button>
@@ -133,25 +144,54 @@ export default function DetailsTab({ course }) {
         </div>
       </Card>
 
-      <Card className="flex items-center justify-between p-6">
-        <div>
-          <h3 className="font-serif text-lg text-ink">Publishing</h3>
-          <p className="text-sm text-ink-muted">
-            {course.status === "published"
-              ? "This course is live in the catalog."
-              : "Publish to make it visible to enrolled learners."}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {course.status !== "archived" && (
-            <Button variant="danger" onClick={archive}>
-              <Archive size={16} /> Archive
+      <Card className="p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="font-serif text-lg text-ink">Publishing</h3>
+            <p className="text-sm text-ink-muted">
+              {course.status === "published"
+                ? "This course is live in the catalog."
+                : "Publish to make it visible to enrolled learners."}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            {course.status !== "archived" && (
+              <Button variant="danger" onClick={archive}>
+                <Archive size={16} /> Archive
+              </Button>
+            )}
+            <Button
+              variant="teal"
+              onClick={publish}
+              loading={mutating}
+              disabled={missingThumbs.length > 0}
+              title={missingThumbs.length > 0 ? "Add a thumbnail to every module first" : undefined}
+            >
+              <Send size={16} /> {course.status === "published" ? "Re-publish" : "Publish"}
             </Button>
-          )}
-          <Button variant="teal" onClick={publish} loading={mutating}>
-            <Send size={16} /> {course.status === "published" ? "Re-publish" : "Publish"}
-          </Button>
+          </div>
         </div>
+
+        {missingThumbs.length > 0 && (
+          <div className="mt-4 flex items-start gap-3 rounded-xl border border-teal/25 bg-teal/5 px-4 py-3 text-sm">
+            <ImageOff size={18} className="mt-0.5 shrink-0 text-teal" />
+            <div className="min-w-0">
+              <p className="font-medium text-ink">Add a thumbnail to every module before publishing</p>
+              <p className="mt-0.5 text-ink-soft">
+                Missing: {missingThumbs.map((v) => v.label).join(", ")}
+              </p>
+              {onGoToModules && (
+                <button
+                  type="button"
+                  onClick={onGoToModules}
+                  className="mt-1.5 text-sm font-medium text-teal hover:underline"
+                >
+                  Go to Modules
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </Card>
     </div>
   );

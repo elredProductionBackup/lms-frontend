@@ -16,6 +16,8 @@ export const fetchMembers = createAsyncThunk(
 );
 
 // POST /api/members  (multipart: email, role, name?, aboutHtml?, file?)
+// `name` is used only if this creates the account; an existing account keeps
+// its name and just gets the role.
 export const addMember = createAsyncThunk(
   "members/add",
   async ({ email, role, name, aboutHtml, file }, { rejectWithValue }) => {
@@ -63,13 +65,20 @@ export const updateMemberProfile = createAsyncThunk(
   "members/profile",
   async ({ userId, name, aboutHtml }, { rejectWithValue }) => {
     try {
-      const data = await api.put(`/users/${userId}/profile`, { name, aboutHtml });
-      return { userId, name, aboutHtml, ...(data || {}) };
+      const body = { aboutHtml };
+      if (name !== undefined) body.name = name; // admins can't rename others
+      const data = await api.put(`/users/${userId}/profile`, body);
+      return { userId, ...(name !== undefined ? { name } : {}), aboutHtml, ...(data || {}) };
     } catch (e) {
       return rejectWithValue({ code: e.code, message: e.message });
     }
   }
 );
+
+// A person's display name is their profile `name` (one per person, max 100).
+// Admins give it only when their call creates the account (seat assignment
+// or POST /members); after that only the person can change it.
+export const PERSON_NAME_MAX = 100;
 
 // POST /api/users/:userId/avatar  (multipart "file") -> { avatarUrl }
 export const uploadMemberAvatar = createAsyncThunk(
@@ -145,7 +154,7 @@ const slice = createSlice({
         s.mutating = false;
         const m = s.items.find((x) => x.userId === a.payload.userId);
         if (m) {
-          m.name = a.payload.name;
+          if (a.payload.name !== undefined) m.name = a.payload.name;
           m.aboutHtml = a.payload.aboutHtml;
         }
       })

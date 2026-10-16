@@ -2,8 +2,8 @@ import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import { api, withPage, PAGE_SIZE } from "@/lib/api";
 
 // Keep pinned items on top (most-recently-pinned first), then leave everyone
-// else in the order the server already returned them (comments oldest-first,
-// questions newest-first). Array.prototype.sort is stable, so the non-pinned
+// else in the order the server already returned them (comments and questions
+// are both newest-first now). Array.prototype.sort is stable, so the non-pinned
 // tail keeps its relative order. Mirrors the backend's pinned-first sort so we
 // don't need a round-trip after every pin/unpin.
 function sortPinnedFirst(list) {
@@ -38,15 +38,30 @@ const fail = (e) => ({ code: e.code, message: e.message });
 
 // ---- Comments ----
 
+// `total` counts every top-level item on the recording (replies aren't
+// counted) and ignores start/offset, so it's the same on every page. It also
+// tells us when everything is loaded. Older backends without `total` fall back
+// to "a full page means there may be more".
+function pageResult(items, total, { start, offset, append }) {
+  const hasTotal = Number.isFinite(total);
+  return {
+    items,
+    start,
+    offset,
+    append,
+    total: hasTotal ? total : null,
+    hasMore: hasTotal ? start + items.length < total : items.length === offset,
+  };
+}
+
 // GET /api/courses/:id/videos/:videoId/comments?start=&offset=
-// (pinned-first, then oldest-first, this recording only)
+// -> { comments, total }  (pinned-first, then newest-first, this recording only)
 export const fetchComments = createAsyncThunk(
   "disc/comments/list",
   async ({ courseId, videoId, start = 0, offset = PAGE_SIZE, append = false }, { rejectWithValue }) => {
     try {
       const data = await api.get(withPage(videoPath(courseId, videoId, "comments"), { start, offset }));
-      const items = data.comments || [];
-      return { items, start, offset, append, hasMore: items.length === offset };
+      return pageResult(data.comments || [], data.total, { start, offset, append });
     } catch (e) {
       return rejectWithValue(fail(e));
     }
@@ -69,7 +84,8 @@ export const addComment = createAsyncThunk(
   }
 );
 
-// DELETE /api/comments/:commentId  (own comment, or a moderator)
+// DELETE /api/comments/:commentId  (writer, this course's author, or an admin)
+// Also removes all its replies.
 export const deleteComment = createAsyncThunk(
   "disc/comments/delete",
   async (commentId, { rejectWithValue }) => {
@@ -119,9 +135,9 @@ export const replyToComment = createAsyncThunk(
   }
 );
 
-// PENDING BACKEND (FEATURES.deleteReplies):
-// DELETE /api/comments/:commentId/replies/:replyId  (reply's author, or a moderator)
-// Works whether the backend returns the full parent comment or just { ok: true }.
+// DELETE /api/comments/:commentId/replies/:replyId
+// (reply's writer, this course's author, or an admin) -> the parent comment
+// without that reply. An already-gone reply returns the comment unchanged.
 export const deleteCommentReply = createAsyncThunk(
   "disc/comments/replyDelete",
   async ({ commentId, replyId }, { rejectWithValue }) => {
@@ -137,14 +153,13 @@ export const deleteCommentReply = createAsyncThunk(
 // ---- Questions (now public, same model as comments) ----
 
 // GET /api/courses/:id/videos/:videoId/questions?start=&offset=
-// (pinned-first, then newest-first, this recording only)
+// -> { questions, total }  (pinned-first, then newest-first, this recording only)
 export const fetchQuestions = createAsyncThunk(
   "disc/questions/list",
   async ({ courseId, videoId, start = 0, offset = PAGE_SIZE, append = false }, { rejectWithValue }) => {
     try {
       const data = await api.get(withPage(videoPath(courseId, videoId, "questions"), { start, offset }));
-      const items = data.questions || [];
-      return { items, start, offset, append, hasMore: items.length === offset };
+      return pageResult(data.questions || [], data.total, { start, offset, append });
     } catch (e) {
       return rejectWithValue(fail(e));
     }
@@ -216,8 +231,8 @@ export const unpinQuestion = createAsyncThunk(
   }
 );
 
-// PENDING BACKEND (FEATURES.deleteQuestions):
-// DELETE /api/questions/:questionId  (question's author, or a moderator)
+// DELETE /api/questions/:questionId  -> { ok: true }
+// (writer, this course's author, or an admin). Also removes all its replies.
 export const deleteQuestion = createAsyncThunk(
   "disc/questions/delete",
   async (questionId, { rejectWithValue }) => {
@@ -230,8 +245,8 @@ export const deleteQuestion = createAsyncThunk(
   }
 );
 
-// PENDING BACKEND (FEATURES.deleteReplies):
-// DELETE /api/questions/:questionId/replies/:replyId  (reply's author, or a moderator)
+// DELETE /api/questions/:questionId/replies/:replyId  -> the parent question
+// (reply's writer, this course's author, or an admin)
 export const deleteQuestionReply = createAsyncThunk(
   "disc/questions/replyDelete",
   async ({ questionId, replyId }, { rejectWithValue }) => {
@@ -243,6 +258,13 @@ export const deleteQuestionReply = createAsyncThunk(
     }
   }
 );
+
+// Newest-first lists shift when someone posts while we page, so the next page
+// can repeat an item we already hold. Skip those instead of showing it twice.
+function dedupeAppend(list, items) {
+  const seen = new Set(list.map((x) => x._id));
+  return [...list, ...items.filter((x) => !seen.has(x._id))];
+}
 
 // Replace or insert a full record returned from a mutation, then re-sort so the
 // pinned tier stays on top.
@@ -261,6 +283,40 @@ function removeReply(list, { parentId, replyId, doc }) {
   return list;
 }
 
+// Add a new top-level comment/question once. The POST response and the
+// socket echo of the same post can arrive in either order, so a second copy
+// replaces the first instead of being shown (or counted) twice.
+function insertTop(s, kind, doc) {
+  const list = s[kind];
+  const i = list.findIndex((x) => x._id === doc._id);
+  if (i >= 0) {
+    list[i] = doc;
+    s[kind] = sortPinnedFirst(list);
+    return;
+  }
+  list.unshift(doc); // newest-first: top, below the pinned ones
+  s[kind] = sortPinnedFirst(list);
+  const start = kind === "comments" ? "commentsStart" : "questionsStart";
+  const total = kind === "comments" ? "commentsTotal" : "questionsTotal";
+  s[start] += 1;
+  if (s[total] != null) s[total] += 1;
+}
+
+// Remove a top-level item once; replies go with it but don't change the total.
+function removeTop(s, kind, id) {
+  const before = s[kind].length;
+  s[kind] = s[kind].filter((x) => x._id !== id);
+  if (s[kind].length === before) return false; // already gone (e.g. my own delete's echo)
+  const start = kind === "comments" ? "commentsStart" : "questionsStart";
+  const total = kind === "comments" ? "commentsTotal" : "questionsTotal";
+  s[start] = Math.max(0, s[start] - 1);
+  if (s[total] != null) s[total] = Math.max(0, s[total] - 1);
+  return true;
+}
+
+// Socket events are per course; only apply ones for the recording on screen.
+const forThisVideo = (s, payload) => Boolean(payload?.videoId) && payload.videoId === s.videoId;
+
 const slice = createSlice({
   name: "discussions",
   initialState: {
@@ -274,6 +330,8 @@ const slice = createSlice({
     questionsHasMore: false,
     commentsStart: 0, // records loaded so far (next fetch's start)
     questionsStart: 0,
+    commentsTotal: null, // from the API; null until the first page arrives
+    questionsTotal: null,
     loadingMoreComments: false,
     loadingMoreQuestions: false,
     posting: false,
@@ -295,9 +353,51 @@ const slice = createSlice({
       s.questionsHasMore = false;
       s.commentsStart = 0;
       s.questionsStart = 0;
+      s.commentsTotal = null;
+      s.questionsTotal = null;
       s.loadingMoreComments = false;
       s.loadingMoreQuestions = false;
       s.error = null;
+    },
+    // ----- realtime (course room on /lms-socket.io) -----
+    rtCommentAdded(s, a) {
+      if (forThisVideo(s, a.payload)) insertTop(s, "comments", a.payload);
+    },
+    // comment:pinned / comment:unpinned / comment:replied carry the full comment
+    rtCommentUpdated(s, a) {
+      if (forThisVideo(s, a.payload)) s.comments = upsertSorted(s.comments, a.payload);
+    },
+    rtCommentDeleted(s, a) {
+      if (forThisVideo(s, a.payload)) removeTop(s, "comments", a.payload.commentId);
+    },
+    rtCommentReplyDeleted(s, a) {
+      if (!forThisVideo(s, a.payload)) return;
+      s.comments = removeReply(s.comments, { parentId: a.payload.commentId, replyId: a.payload.replyId });
+    },
+    rtQuestionAdded(s, a) {
+      if (forThisVideo(s, a.payload)) insertTop(s, "questions", a.payload);
+    },
+    // question:replied / question:pinned / question:unpinned
+    rtQuestionUpdated(s, a) {
+      if (!forThisVideo(s, a.payload)) return;
+      s.questions = upsertSorted(s.questions, a.payload);
+      if (s.activeQuestion?._id === a.payload._id) s.activeQuestion = a.payload;
+    },
+    rtQuestionDeleted(s, a) {
+      if (!forThisVideo(s, a.payload)) return;
+      removeTop(s, "questions", a.payload.questionId);
+      if (s.activeQuestion?._id === a.payload.questionId) s.activeQuestion = null;
+    },
+    rtQuestionReplyDeleted(s, a) {
+      if (!forThisVideo(s, a.payload)) return;
+      const { questionId, replyId } = a.payload;
+      s.questions = removeReply(s.questions, { parentId: questionId, replyId });
+      if (s.activeQuestion?._id === questionId) {
+        s.activeQuestion = {
+          ...s.activeQuestion,
+          replies: (s.activeQuestion.replies || []).filter((r) => r._id !== replyId),
+        };
+      }
     },
     clearDiscussions(s) {
       s.videoId = null;
@@ -308,6 +408,8 @@ const slice = createSlice({
       s.questionsHasMore = false;
       s.commentsStart = 0;
       s.questionsStart = 0;
+      s.commentsTotal = null;
+      s.questionsTotal = null;
     },
   },
   extraReducers: (b) => {
@@ -321,10 +423,11 @@ const slice = createSlice({
         if (!isCurrent(s, a)) return;
         s.commentsStatus = "idle";
         s.loadingMoreComments = false;
-        const { items, start, append, hasMore } = a.payload;
-        s.comments = append ? [...s.comments, ...items] : items;
+        const { items, start, append, hasMore, total } = a.payload;
+        s.comments = append ? dedupeAppend(s.comments, items) : items;
         s.commentsStart = start + items.length;
         s.commentsHasMore = hasMore;
+        if (total != null) s.commentsTotal = total;
       })
       .addCase(fetchComments.rejected, (s, a) => {
         if (!isCurrent(s, a)) return;
@@ -340,9 +443,7 @@ const slice = createSlice({
       .addCase(addComment.fulfilled, (s, a) => {
         s.posting = false;
         if (!isCurrent(s, a)) return; // posted on a recording we've since left
-        s.comments.push(a.payload); // oldest-first tail; pinned still lead
-        s.comments = sortPinnedFirst(s.comments);
-        s.commentsStart += 1;
+        insertTop(s, "comments", a.payload);
       })
       .addCase(addComment.rejected, (s, a) => {
         s.posting = false;
@@ -351,9 +452,7 @@ const slice = createSlice({
 
     // Also step the page cursor back, otherwise "Load more" skips one comment.
     b.addCase(deleteComment.fulfilled, (s, a) => {
-      const before = s.comments.length;
-      s.comments = s.comments.filter((c) => c._id !== a.payload);
-      if (s.comments.length < before) s.commentsStart = Math.max(0, s.commentsStart - 1);
+      removeTop(s, "comments", a.payload);
     });
 
     [pinComment, unpinComment, replyToComment].forEach((t) => {
@@ -382,10 +481,11 @@ const slice = createSlice({
         if (!isCurrent(s, a)) return;
         s.questionsStatus = "idle";
         s.loadingMoreQuestions = false;
-        const { items, start, append, hasMore } = a.payload;
-        s.questions = append ? [...s.questions, ...items] : items;
+        const { items, start, append, hasMore, total } = a.payload;
+        s.questions = append ? dedupeAppend(s.questions, items) : items;
         s.questionsStart = start + items.length;
         s.questionsHasMore = hasMore;
+        if (total != null) s.questionsTotal = total;
       })
       .addCase(fetchQuestions.rejected, (s, a) => {
         if (!isCurrent(s, a)) return;
@@ -401,9 +501,7 @@ const slice = createSlice({
       .addCase(askQuestion.fulfilled, (s, a) => {
         s.posting = false;
         if (!isCurrent(s, a)) return;
-        s.questions.unshift(a.payload); // newest-first
-        s.questions = sortPinnedFirst(s.questions);
-        s.questionsStart += 1;
+        insertTop(s, "questions", a.payload);
       })
       .addCase(askQuestion.rejected, (s, a) => {
         s.posting = false;
@@ -428,9 +526,9 @@ const slice = createSlice({
     });
 
     b.addCase(deleteQuestion.fulfilled, (s, a) => {
-      const before = s.questions.length;
-      s.questions = s.questions.filter((q) => q._id !== a.payload);
-      if (s.questions.length < before) s.questionsStart = Math.max(0, s.questionsStart - 1);
+      // Replies go with it, but the total only counts top-level questions, so
+      // it drops by exactly one.
+      removeTop(s, "questions", a.payload);
       if (s.activeQuestion?._id === a.payload) s.activeQuestion = null;
     });
 
@@ -448,5 +546,16 @@ const slice = createSlice({
   },
 });
 
-export const { setDiscussionVideo, clearDiscussions } = slice.actions;
+export const {
+  setDiscussionVideo,
+  clearDiscussions,
+  rtCommentAdded,
+  rtCommentUpdated,
+  rtCommentDeleted,
+  rtCommentReplyDeleted,
+  rtQuestionAdded,
+  rtQuestionUpdated,
+  rtQuestionDeleted,
+  rtQuestionReplyDeleted,
+} = slice.actions;
 export default slice.reducer;

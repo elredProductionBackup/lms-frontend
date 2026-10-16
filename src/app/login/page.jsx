@@ -2,21 +2,51 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { Mail, KeyRound, ArrowLeft, ArrowRight } from "lucide-react";
+import { Mail, KeyRound, ArrowLeft, ArrowRight, ShieldAlert } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
-import { requestOtp, verifyOtp, resetOtp } from "@/store/slices/authSlice";
+import {
+  requestOtp,
+  verifyOtp,
+  resetOtp,
+  googleSignIn,
+  clearAuthError,
+} from "@/store/slices/authSlice";
 import { Button } from "@/components/ui/Primitives";
 import { Input, Label } from "@/components/ui/Field";
-import { mediaUrl } from "@/lib/api";
+import BrandMark from "@/components/ui/BrandMark";
+import GoogleSignInButton, { GOOGLE_CLIENT_ID } from "@/components/auth/GoogleSignInButton";
+import { SITE } from "@/lib/site";
+
+// Sign-in is invite-only. A 403 LOGIN_NOT_ALLOWED gets its own callout so it
+// doesn't read like a typo in the email; everything else is a plain line.
+function AuthError({ error, code }) {
+  if (!error) return null;
+  if (code === "LOGIN_NOT_ALLOWED") {
+    return (
+      <div
+        role="alert"
+        className="mt-4 flex gap-3 rounded-xl border border-teal/25 bg-teal/5 px-3.5 py-3 text-sm text-ink"
+      >
+        <ShieldAlert size={18} className="mt-0.5 shrink-0 text-teal" />
+        <div>
+          <p className="font-medium">No access for this email yet</p>
+          <p className="mt-0.5 text-ink-soft">{error}</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <p role="alert" className="mt-3 text-sm text-red-600">
+      {error}
+    </p>
+  );
+}
 
 export default function LoginPage() {
   const dispatch = useAppDispatch();
   const router = useRouter();
-  const { otpStage, otpEmail, devOtp, status, error, user } = useAppSelector(
-    (s) => s.auth
-  );
-  const settings = useAppSelector((s) => s.settings);
+  const { otpStage, otpEmail, devOtp, status, error, errorCode, method, user } =
+    useAppSelector((s) => s.auth);
 
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -37,6 +67,13 @@ export default function LoginPage() {
     e.preventDefault();
     dispatch(verifyOtp({ email: otpEmail, code: code.trim() }));
   };
+  const onGoogle = (idToken) => {
+    dispatch(googleSignIn({ idToken }));
+  };
+
+  const loading = status === "loading";
+  const emailBusy = loading && method === "email";
+  const googleBusy = loading && method === "google";
 
   return (
     <div className="flex min-h-screen">
@@ -58,12 +95,8 @@ export default function LoginPage() {
             opacity: 0.6,
           }}
         />
-        <div className="relative z-10 font-serif text-2xl text-white">
-                    <img
-            src={"/tpn.svg"}
-            alt={settings.name || "The Professional Network"}
-            className="h-12 w-auto"
-          />
+        <div className="relative z-10">
+          <BrandMark tone="dark" size="lg" />
         </div>
         <div className="relative z-10 max-w-md">
           <p className="font-serif text-4xl leading-tight text-white">
@@ -74,24 +107,22 @@ export default function LoginPage() {
           </p>
         </div>
         <p className="relative z-10 text-sm text-white/50">
-          © {new Date().getFullYear()} The Professionals Network
+          © {new Date().getFullYear()} {SITE.name}
         </p>
       </div>
 
       {/* Form */}
       <div className="flex flex-1 items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm">
-          <img
-            src={settings.logoUrl ? mediaUrl(settings.logoUrl) : "/tpn.svg"}
-            alt={settings.name || "The Professional Network"}
-            className="mb-8 h-10 w-auto lg:hidden"
-          />
+          <BrandMark size="md" className="mb-8 lg:hidden" />
 
           {otpStage === "email" ? (
             <form onSubmit={sendCode} className="animate-fade-in">
               <h1 className="font-serif text-3xl text-ink">Sign in</h1>
               <p className="mt-2 text-sm text-ink-muted">
-                We&apos;ll email you a one-time code. No password needed.
+                {GOOGLE_CLIENT_ID
+                  ? "Use the email your admin added, or continue with Google."
+                  : "We'll email you a one-time code. No password needed."}
               </p>
               <div className="mt-8">
                 <Label htmlFor="email">Email address</Label>
@@ -106,22 +137,41 @@ export default function LoginPage() {
                     autoFocus
                     required
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (error) dispatch(clearAuthError());
+                    }}
                     placeholder="you@company.com"
                     className="pl-10"
                   />
                 </div>
               </div>
-              {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+              <AuthError error={error} code={errorCode} />
               <Button
                 type="submit"
                 variant="teal"
                 size="lg"
                 className="mt-6 w-full"
-                loading={status === "loading"}
+                loading={emailBusy}
+                disabled={googleBusy}
               >
                 Send code <ArrowRight size={16} />
               </Button>
+
+              {GOOGLE_CLIENT_ID && (
+                <>
+                  <div className="my-6 flex items-center gap-3 text-xs text-ink-muted">
+                    <span className="h-px flex-1 bg-ink/10" />
+                    or
+                    <span className="h-px flex-1 bg-ink/10" />
+                  </div>
+                  <GoogleSignInButton onCredential={onGoogle} busy={googleBusy} />
+                </>
+              )}
+
+              <p className="mt-6 text-center text-xs leading-relaxed text-ink-muted">
+                Access is by invitation. If you can&apos;t sign in, ask your admin to add you.
+              </p>
               {/* <p className="mt-6 text-center text-sm text-ink-muted">
                 New here?{" "}
                 <Link href="/join" className="font-medium text-teal hover:underline">
@@ -170,20 +220,21 @@ export default function LoginPage() {
                 />
                 </div>
               </div>
-              {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+              <AuthError error={error} code={errorCode} />
               <Button
                 type="submit"
                 variant="teal"
                 size="lg"
                 className="mt-6 w-full"
-                loading={status === "loading"}
+                loading={emailBusy}
               >
                 Verify & continue
               </Button>
               <button
                 type="button"
                 onClick={() => dispatch(requestOtp({ email: otpEmail }))}
-                className="mt-4 w-full text-center text-sm text-ink-muted hover:text-ink"
+                disabled={loading}
+                className="mt-4 w-full text-center text-sm text-ink-muted hover:text-ink disabled:opacity-50"
               >
                 Resend code
               </button>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Camera, Save } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import {
@@ -12,17 +12,13 @@ import { pushToast } from "@/store/slices/uiSlice";
 import { userUpdated } from "@/store/slices/authSlice";
 import RouteGuard from "@/components/auth/RouteGuard";
 import TopNav from "@/components/learner/TopNav";
+import SiteFooter from "@/components/learner/SiteFooter";
 import { Card } from "@/components/ui/Shell";
 import { Button, Avatar, Spinner, Badge } from "@/components/ui/Primitives";
 import { Input, Textarea, Fieldset } from "@/components/ui/Field";
-import { Dropdown } from "@/components/ui/Dropdown";
-import { DateField } from "@/components/ui/DateField";
-import { dmyToIso, isoToDmy, toISODate } from "@/lib/date";
 import {
   AVATAR,
-  GENDER_OPTIONS,
   LIMITS,
-  dobBounds,
   sanitize,
   validateProfile,
   validateAvatar,
@@ -53,6 +49,70 @@ const EMPTY = {
 };
 
 const URL_FIELDS = ["organizationUrl", "linkedInUrl"];
+
+// Form values from GET /me/profile (or a PUT response).
+function formFromProfile(me) {
+  return {
+    name: me.name || "",
+    firstName: me.firstName || "",
+    lastName: me.lastName || "",
+    gender: me.gender || "",
+    dob: dobFromApi(me.dob),
+    city: me.location?.city || "",
+    state: me.location?.state || "",
+    country: me.location?.country || "",
+    profession: me.profession || "",
+    industry: me.industry || "",
+    organizationType: me.organizationType || "",
+    companyType: me.companyType || "",
+    companyDisplayName: me.companyDisplayName || "",
+    organizationUrl: me.organizationUrl || "",
+    linkedInUrl: me.linkedInUrl || "",
+    about: htmlToPlainText(me.aboutHtml),
+  };
+}
+
+// PUT /me/profile is a partial update, so send ONLY what the user changed.
+// Sending every field (empty ones included) is what made "save my display
+// name" fail: the live API still rejects "" for firstName/profession/…,
+// null gender and half-empty locations until the relaxed profile rules ship,
+// so one untouched empty field 400'd the whole save. With a diff, changing
+// just the display name sends just { name }.
+//
+// Clearing a field that had a value still sends "" / null as the contract
+// asks; on the current API that particular save may be refused with the
+// server's message until the relaxed rules are live.
+function buildPatch(before, after) {
+  const patch = {};
+  if (after.name !== before.name) patch.name = after.name;
+  TEXT_KEYS.forEach((k) => {
+    if ((after[k] || "") !== (before[k] || "")) patch[k] = after[k] || "";
+  });
+  if ((after.gender || "") !== (before.gender || "")) patch.gender = after.gender || null;
+  if ((after.dob || "") !== (before.dob || "")) patch.dob = after.dob || ""; // DD/MM/YYYY
+  const loc = ["city", "state", "country"];
+  if (loc.some((k) => (after[k] || "") !== (before[k] || ""))) {
+    patch.location = { city: after.city || "", state: after.state || "", country: after.country || "" };
+  }
+  if ((after.about || "").trim() !== (before.about || "").trim()) {
+    patch.aboutHtml = plainTextToHtml(after.about);
+  }
+  return patch;
+}
+
+
+// Plain text fields sent as-is; "" clears the saved value.
+const TEXT_KEYS = [
+  "firstName",
+  "lastName",
+  "profession",
+  "industry",
+  "organizationType",
+  "companyType",
+  "companyDisplayName",
+  "organizationUrl",
+  "linkedInUrl",
+];
 const idFor = (key) => `profile-${key}`;
 
 function trimAll(form) {
@@ -68,36 +128,19 @@ function ProfileInner() {
   const { role } = useAppSelector((s) => s.auth);
   const [form, setForm] = useState(EMPTY);
   const [errors, setErrors] = useState({});
-  // DateField works in YYYY-MM-DD; the form/API keep DD/MM/YYYY.
-  const dobRange = useMemo(() => {
-    const { min, max } = dobBounds();
-    return { min: toISODate(min), max: toISODate(max) };
-  }, []);
-
   useEffect(() => {
     dispatch(fetchMyProfile());
   }, [dispatch]);
 
+  // What the server last gave us, in form shape. Saving sends only the fields
+  // that differ from this.
+  const baselineRef = useRef(EMPTY);
+
   useEffect(() => {
     if (!me) return;
-    setForm({
-      name: me.name || "",
-      firstName: me.firstName || "",
-      lastName: me.lastName || "",
-      gender: me.gender || "",
-      dob: dobFromApi(me.dob),
-      city: me.location?.city || "",
-      state: me.location?.state || "",
-      country: me.location?.country || "",
-      profession: me.profession || "",
-      industry: me.industry || "",
-      organizationType: me.organizationType || "",
-      companyType: me.companyType || "",
-      companyDisplayName: me.companyDisplayName || "",
-      organizationUrl: me.organizationUrl || "",
-      linkedInUrl: me.linkedInUrl || "",
-      about: htmlToPlainText(me.aboutHtml),
-    });
+    const loaded = formFromProfile(me);
+    baselineRef.current = loaded;
+    setForm(loaded);
     setErrors({});
   }, [me]);
 
@@ -154,7 +197,14 @@ function ProfileInner() {
     });
     setForm(clean);
 
-    const found = validateProfile(clean);
+    // Only block the save on fields the user actually changed (plus the
+    // required display name). Old data that doesn't match today's FE rules
+    // shouldn't stop someone from fixing their name.
+    const before = baselineRef.current;
+    const touched = (k) => k === "name" || (clean[k] || "") !== (before[k] || "");
+    const found = Object.fromEntries(
+      Object.entries(validateProfile(clean)).filter(([k]) => touched(k))
+    );
     setErrors(found);
     if (Object.keys(found).length > 0) {
       const first = Object.keys(EMPTY).find((k) => found[k]);
@@ -163,29 +213,11 @@ function ProfileInner() {
       return;
     }
 
-    const patch = {
-      name: clean.name,
-      firstName: clean.firstName,
-      lastName: clean.lastName,
-      profession: clean.profession,
-      industry: clean.industry,
-      organizationType: clean.organizationType,
-      companyType: clean.companyType,
-      companyDisplayName: clean.companyDisplayName,
-      organizationUrl: clean.organizationUrl,
-      linkedInUrl: clean.linkedInUrl,
-      aboutHtml: plainTextToHtml(clean.about),
-    };
-    if (clean.gender) patch.gender = clean.gender;
-    if (clean.dob) patch.dob = clean.dob; // sent as DD/MM/YYYY, same as before
-    if (clean.city && clean.state && clean.country) {
-      patch.location = { city: clean.city, state: clean.state, country: clean.country };
+    const patch = buildPatch(baselineRef.current, clean);
+    if (Object.keys(patch).length === 0) {
+      dispatch(pushToast("No changes to save", "default"));
+      return;
     }
-    // Drop empty strings for optional bounded fields to avoid 400s
-    Object.keys(patch).forEach((k) => {
-      if (patch[k] === "" && !["aboutHtml", "organizationUrl", "linkedInUrl"].includes(k))
-        delete patch[k];
-    });
 
     const res = await dispatch(updateMyProfile(patch));
     if (updateMyProfile.fulfilled.match(res)) {
@@ -221,11 +253,12 @@ function ProfileInner() {
   }
 
   const aboutCount = Array.from(form.about).length;
+  const optional = <span className="ml-2 align-middle font-sans text-xs font-normal text-ink-muted">Optional</span>;
 
   return (
-    <div className="min-h-screen">
+    <div className="flex min-h-screen flex-col">
       <TopNav />
-      <main className="mx-auto max-w-3xl px-5 py-10">
+      <main className="mx-auto w-full max-w-3xl flex-1 px-5 py-10">
         <div className="mb-8 flex items-center gap-5">
           <div className="relative">
             <Avatar name={me?.name} src={me?.avatarUrl} size={80} />
@@ -259,7 +292,13 @@ function ProfileInner() {
             <h2 className="mb-4 font-serif text-lg text-ink">Basics</h2>
             <div className="grid gap-4 sm:grid-cols-2">
               <Fieldset {...field("name", "Display name")}>
-                <Input {...bind("name")} placeholder="How your name appears to others" autoComplete="nickname" />
+                <Input
+                  {...bind("name")}
+                  maxLength={LIMITS.name}
+                  placeholder="How your name appears to others"
+                  autoComplete="nickname"
+                  required
+                />
               </Fieldset>
               <Fieldset label="Email" hint="can't be changed" htmlFor={idFor("email")}>
                 <Input
@@ -271,31 +310,11 @@ function ProfileInner() {
                   className="opacity-60"
                 />
               </Fieldset>
-              <Fieldset {...field("firstName", "First name")}>
-                <Input {...bind("firstName")} placeholder="First name" autoComplete="given-name" />
-              </Fieldset>
-              <Fieldset {...field("lastName", "Last name")}>
-                <Input {...bind("lastName")} placeholder="Last name" autoComplete="family-name" />
-              </Fieldset>
-              <Fieldset {...field("gender", "Gender")}>
-                <Dropdown {...bind("gender")} options={GENDER_OPTIONS} placeholder="Select gender" />
-              </Fieldset>
-              <Fieldset {...field("dob", "Date of birth")}>
-                <DateField
-                  {...bind("dob")}
-                  value={dmyToIso(form.dob)}
-                  onChange={(e) => onChange("dob")(isoToDmy(e.target.value))}
-                  min={dobRange.min}
-                  max={dobRange.max}
-                  openTo="years"
-                  placeholder="Select your date of birth"
-                />
-              </Fieldset>
             </div>
           </Card>
 
           <Card className="p-6">
-            <h2 className="mb-4 font-serif text-lg text-ink">Location</h2>
+            <h2 className="mb-4 font-serif text-lg text-ink">Location{optional}</h2>
             <div className="grid gap-4 sm:grid-cols-3">
               <Fieldset {...field("city", "City")}>
                 <Input {...bind("city")} placeholder="City" autoComplete="address-level2" />
@@ -310,7 +329,7 @@ function ProfileInner() {
           </Card>
 
           <Card className="p-6">
-            <h2 className="mb-4 font-serif text-lg text-ink">Work & links</h2>
+            <h2 className="mb-4 font-serif text-lg text-ink">Work & links{optional}</h2>
             <div className="grid gap-4 sm:grid-cols-2">
               <Fieldset {...field("profession", "Profession")}>
                 <Input {...bind("profession")} placeholder="e.g. Software engineer" />
@@ -337,7 +356,7 @@ function ProfileInner() {
           </Card>
 
           <Card className="p-6">
-            <h2 className="mb-4 font-serif text-lg text-ink">About</h2>
+            <h2 className="mb-4 font-serif text-lg text-ink">About{optional}</h2>
             <Fieldset {...field("about", "Bio")}>
               <Textarea
                 {...bind("about")}
@@ -357,6 +376,7 @@ function ProfileInner() {
           </div>
         </form>
       </main>
+      <SiteFooter />
     </div>
   );
 }

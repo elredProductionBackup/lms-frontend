@@ -1,12 +1,17 @@
 // Rules for the profile form. The backend should enforce the same limits;
 // these only give the user fast, friendly feedback.
+//
+// Only the display name is required (non-empty, max 100). Every other field is
+// optional and can be cleared: "" clears text fields and dob, null clears
+// gender, and each location part may be "" on its own. Filled values are still
+// validated.
 
 import { addDays, ageOn, maskDMY, parseDMY, yearsAgo } from "@/lib/date";
 
 export const LIMITS = {
-  name: 50,
-  firstName: 30,
-  lastName: 30,
+  name: 100,
+  firstName: 50,
+  lastName: 50,
   city: 50,
   state: 50,
   country: 50,
@@ -56,7 +61,7 @@ const CHARS = {
 };
 
 const TEXT_FIELDS = {
-  name: { label: "Display name", kind: "name", min: 2, required: true },
+  name: { label: "Display name", kind: "name", min: 1, required: true },
   firstName: { label: "First name", kind: "name", min: 2 },
   lastName: { label: "Last name", kind: "name", min: 1 },
   city: { label: "City", kind: "place", min: 2 },
@@ -180,15 +185,6 @@ export function validateProfile(form) {
       errors[key] = `${rule.label} needs at least ${rule.min} characters`;
     else if (charCount(value) > LIMITS[key])
       errors[key] = `${rule.label} can be up to ${LIMITS[key]} characters`;
-  }
-
-  // Location is saved as one object, so it's all three or none.
-  const loc = ["city", "state", "country"];
-  const filled = loc.filter((k) => (form[k] || "").trim());
-  if (filled.length > 0 && filled.length < loc.length) {
-    loc.forEach((k) => {
-      if (!(form[k] || "").trim()) errors[k] = "Add city, state and country together";
-    });
   }
 
   if (form.gender && !GENDERS.includes(form.gender)) errors.gender = "Choose an option from the list";

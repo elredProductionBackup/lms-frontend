@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, PlayCircle, CircleCheck, Lock } from "lucide-react";
+import { ArrowLeft, PlayCircle, CircleCheck, Lock, Loader2 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { fetchCourse, clearCurrentCourse } from "@/store/slices/coursesSlice";
 import {
@@ -21,9 +21,30 @@ import {
 import RouteGuard from "@/components/auth/RouteGuard";
 import TopNav from "@/components/learner/TopNav";
 import VideoPlayer from "@/components/learner/VideoPlayer";
+import { PosterImage, posterSources } from "@/components/learner/Poster";
 import DiscussionPanel from "@/components/learner/DiscussionPanel";
+import SiteFooter from "@/components/learner/SiteFooter";
 import { Spinner } from "@/components/ui/Primitives";
 import { clock } from "@/lib/format";
+import { isSameUser } from "@/lib/identity";
+import useCourseRealtime from "@/hooks/useCourseRealtime";
+
+// 16:9 module thumbnail for the "In this session" list: the module's own
+// thumbnail, else the course cover, else the TPN poster.
+function ModuleThumb({ sources, children }) {
+  return (
+    <span className="relative flex aspect-video w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-ink sm:w-28">
+      <PosterImage
+        sources={sources}
+        loading="lazy"
+        className="absolute inset-0 h-full w-full object-cover"
+      />
+      <span className="relative flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm">
+        {children}
+      </span>
+    </span>
+  );
+}
 
 // Moderation (pin / unpin / delete anyone's post) is allowed for an admin, or
 // for the author of THIS course only. Any other author is just a viewer here,
@@ -31,15 +52,20 @@ import { clock } from "@/lib/format";
 function canModerateCourse(course, role, user) {
   if (role === "admin") return true;
   if (role !== "author" || !course) return false;
-  const myId = user?.id || user?._id;
-  const authorId = course.authorId?._id || course.authorId || course.author?.id;
-  return Boolean(myId && authorId) && String(myId) === String(authorId);
+  return isSameUser(user, course.authorId) || isSameUser(user, course.author);
 }
 
 function PlayerInner() {
   const { id } = useParams();
   const dispatch = useAppDispatch();
   const { current, detailStatus } = useAppSelector((s) => s.courses);
+  // Two flags from GET /courses/:id:
+  //   unlocked - access window open, so the video plays
+  //   enrolled - on the course and not removed, so comments, Q&A, notes,
+  //              bookmarks and live updates work (even after the window ends)
+  // Older responses without `enrolled` fall back to `unlocked`.
+  const isEnrolled = (c) => (typeof c?.enrolled === "boolean" ? c.enrolled : Boolean(c?.unlocked));
+  useCourseRealtime(id, Boolean(current?._id === id && isEnrolled(current)));
   const { role, user } = useAppSelector((s) => s.auth);
   const router = useRouter();
   const pathname = usePathname();
@@ -91,7 +117,7 @@ function PlayerInner() {
     if (!courseLoaded || !requestedVideoId || !activeVideoId) return;
     if (requestedVideoId !== activeVideoId) selectVideo(activeVideoId);
   }, [courseLoaded, requestedVideoId, activeVideoId, selectVideo]);
-  const canLoadPanels = !!current?.unlocked && current?._id === id;
+  const canLoadPanels = current?._id === id && isEnrolled(current);
 
   useEffect(() => {
     dispatch(setDiscussionVideo(activeVideoId));
@@ -116,6 +142,7 @@ function PlayerInner() {
   const videos = current.videos || [];
   const activeVideo = selectedVideo;
   const unlocked = !!current.unlocked;
+  const enrolled = isEnrolled(current);
   const canModerate = canModerateCourse(current, role, user);
 
   // A seek requested from a discussion timestamp chip: hand it to the player,
@@ -126,12 +153,12 @@ function PlayerInner() {
   };
 
   return (
-    <div className="min-h-screen">
+    <div className="flex min-h-screen flex-col">
       <TopNav />
       {/* Same max-width as TopNav (max-w-6xl) in BOTH modes so the content edges
           line up with the nav. "wide" doesn't grow the container — it only
           reflows the grid below (video full-width, comments beside the title). */}
-      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-5 sm:py-8">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-5 sm:py-8">
         <Link
           href="/home"
           className="mb-5 inline-flex items-center gap-1.5 text-sm font-medium text-teal hover:underline sm:mb-6"
@@ -172,7 +199,10 @@ function PlayerInner() {
               courseId={id}
               video={activeVideo}
               unlocked={unlocked}
+              enrolled={enrolled}
+              onAccessLost={() => dispatch(fetchCourse(id))}
               onTime={setCurrentTime}
+              posters={posterSources(activeVideo, current)}
               wide={wide}
               onToggleWide={() => setWide((v) => !v)}
             />
@@ -193,11 +223,15 @@ function PlayerInner() {
               )}
             </div>
 
-            {/* Video list */}
-            {videos.length > 1 && (
+            {/* Module list (shown even for a single module, so its thumbnail
+                is always visible alongside the player) */}
+            {videos.length > 0 && (
               <div className="mt-8">
                 <h2 className="mb-3 font-serif text-lg text-ink">
-                  In this session · {videos.length} modules
+                  In this session
+                  <span className="ml-2 font-sans text-sm font-normal text-ink-muted">
+                    {videos.length} {videos.length === 1 ? "module" : "modules"}
+                  </span>
                 </h2>
                 <div className="space-y-2">
                   {videos.map((v, i) => {
@@ -207,33 +241,44 @@ function PlayerInner() {
                       <button
                         key={v._id}
                         type="button"
-                        onClick={() => ready && unlocked && !active && selectVideo(v._id)}
-                        disabled={!ready || !unlocked}
-                        className={`flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition-colors sm:px-4 ${
+                        onClick={() => ready && enrolled && !active && selectVideo(v._id)}
+                        disabled={!ready || !enrolled}
+                        aria-current={active ? "true" : undefined}
+                        className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left transition-colors sm:gap-4 ${
                           active
-                            ? "border-teal bg-teal/6"
-                            : "border-ink/8 bg-cream-50 hover:bg-cream-100"
+                            ? "border-teal/60 bg-teal/[0.04]"
+                            : "border-ink/8 bg-cream-50 hover:border-ink/15 hover:bg-cream-100"
                         } disabled:cursor-not-allowed disabled:opacity-60`}
                       >
-                        {!unlocked ? (
-                          <Lock size={18} className="shrink-0 text-ink-muted" />
-                        ) : active ? (
-                          <PlayCircle size={18} className="shrink-0 text-teal" />
-                        ) : ready ? (
-                          <CircleCheck size={18} className="shrink-0 text-ink-muted" />
-                        ) : (
-                          <Spinner size={16} />
-                        )}
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
-                          {v.title || `Recording ${i + 1}`}
-                        </span>
-                        {v.durationSeconds ? (
-                          <span className="shrink-0 font-mono text-xs text-ink-muted">
-                            {clock(v.durationSeconds)}
+                        <ModuleThumb sources={posterSources(v, current)}>
+                          {!unlocked ? (
+                            <Lock size={13} />
+                          ) : active ? (
+                            <PlayCircle size={15} />
+                          ) : ready ? (
+                            <CircleCheck size={13} />
+                          ) : (
+                            <Loader2 size={13} className="animate-spin" />
+                          )}
+                        </ModuleThumb>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-ink">
+                            {v.title || `Module ${i + 1}`}
                           </span>
-                        ) : (
-                          <span className="shrink-0 text-xs capitalize text-ink-muted">{v.status}</span>
-                        )}
+                          <span className="mt-0.5 block text-xs text-ink-muted">
+                            {active ? (
+                              <span className="font-medium text-teal">Now playing</span>
+                            ) : (
+                              `Module ${i + 1}`
+                            )}
+                            {" · "}
+                            {v.durationSeconds ? (
+                              <span className="tabular-nums">{clock(v.durationSeconds)}</span>
+                            ) : (
+                              <span className="capitalize">{ready ? "Ready" : v.status}</span>
+                            )}
+                          </span>
+                        </span>
                       </button>
                     );
                   })}
@@ -250,16 +295,27 @@ function PlayerInner() {
                 : "lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:sticky lg:top-20 lg:h-[calc(100vh-6rem)]"
             }`}
           >
-            <DiscussionPanel
-              courseId={id}
-              videoId={activeVideo?._id}
-              currentTime={currentTime}
-              seekTo={requestSeek}
-              canModerate={canModerate}
-            />
+            {enrolled ? (
+              <DiscussionPanel
+                courseId={id}
+                videoId={activeVideo?._id}
+                currentTime={currentTime}
+                seekTo={requestSeek}
+                canModerate={canModerate}
+              />
+            ) : (
+              <div className="rounded-card border border-ink/8 bg-cream-50 p-6 text-center">
+                <Lock size={22} strokeWidth={1.75} className="mx-auto mb-2 text-ink-muted" />
+                <p className="font-serif text-lg text-ink">You&apos;re not enrolled</p>
+                <p className="mt-1 text-sm text-ink-muted">
+                  Comments, Q&amp;A and notes open once your admin gives you a seat on this course.
+                </p>
+              </div>
+            )}
           </aside>
         </div>
       </main>
+      <SiteFooter />
     </div>
   );
 }

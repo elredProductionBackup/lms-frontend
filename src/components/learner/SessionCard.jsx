@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { Lock, Play } from "lucide-react";
 import { Badge, Dot, Avatar } from "@/components/ui/Primitives";
 import { minutesLabel, plainText, formatDate } from "@/lib/format";
 import { mediaUrl } from "@/lib/api";
+import { PosterImage, STATIC_POSTER } from "@/components/learner/Poster";
 
 // 
 // thumbnailUrl can be an inline data:/blob: URI or an already-absolute URL —
@@ -20,14 +20,20 @@ function resolveThumb(url) {
 
 export default function SessionCard({ course }) {
   const unlocked = !!course.unlocked;
-  const [thumbFailed, setThumbFailed] = useState(false);
+  // Enrolled with the window closed: the video is locked but the course page
+  // (comments, Q&A, notes) still works.
+  const enrolled = typeof course.enrolled === "boolean" ? course.enrolled : unlocked;
+  const accessEnded = enrolled && !unlocked;
   const durations = (course.videos || []).reduce(
     (sum, v) => sum + (v.durationSeconds || 0),
     0
   );
   const durLabel = minutesLabel(durations) || `${(course.videos || []).length || 0} clips`;
-  const thumb = resolveThumb(course.thumbnailUrl);
-  const showThumb = thumb && !thumbFailed;
+  // Course cover first, then the first module's thumbnail, then the TPN poster.
+  const firstModuleThumb = (course.videos || []).find((v) => v.thumbnailUrl)?.thumbnailUrl;
+  const sources = [
+    ...new Set([resolveThumb(course.thumbnailUrl), resolveThumb(firstModuleThumb), STATIC_POSTER].filter(Boolean)),
+  ];
 
   // Access window shown on the reference cards
   const until = course.accessEndAt || course.endAt || course.publishedAt;
@@ -39,20 +45,16 @@ export default function SessionCard({ course }) {
     >
       {/* Header: real thumbnail when present, neutral block as fallback */}
       <div className="relative flex h-44 items-center justify-center bg-gradient-to-br from-ink to-ink-soft">
-        {showThumb && (
-          <>
-            <img
-              src={thumb}
-              alt={course.title || ""}
-              onError={() => setThumbFailed(true)}
-              className={`absolute inset-0 h-full w-full object-cover ${
-                unlocked ? "" : "grayscale-[0.4] brightness-75"
-              }`}
-            />
-            {/* Scrim so the labels and play button stay readable over any image */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-black/25" />
-          </>
-        )}
+        <PosterImage
+          sources={sources}
+          alt={course.title || ""}
+          loading="lazy"
+          className={`absolute inset-0 h-full w-full object-cover ${
+            unlocked ? "" : "grayscale-[0.4] brightness-75"
+          }`}
+        />
+        {/* Scrim so the labels and play button stay readable over any image */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-black/25" />
         <span
           className={`relative z-10 flex h-16 w-16 items-center justify-center rounded-full ${
             unlocked ? "bg-white text-ink" : "bg-black/35 text-general-light"
@@ -63,6 +65,16 @@ export default function SessionCard({ course }) {
         <span className="absolute bottom-4 right-4 z-10 rounded-md bg-black/55 px-2.5 py-1 text-xs font-medium text-white">
           {durLabel}
         </span>
+        {accessEnded && (
+          <span className="absolute left-4 top-4 z-10 rounded-md bg-black/60 px-2.5 py-1 text-xs font-medium text-white">
+            Video access ended
+          </span>
+        )}
+        {!enrolled && (
+          <span className="absolute left-4 top-4 z-10 rounded-md bg-black/60 px-2.5 py-1 text-xs font-medium text-white">
+            Not enrolled
+          </span>
+        )}
       </div>
 
       {/* Body */}

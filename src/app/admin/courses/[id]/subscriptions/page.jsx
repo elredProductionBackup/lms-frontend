@@ -9,7 +9,6 @@ import {
   fetchSubscriptions,
   createSubscription,
   updateSubscription,
-  assignSeat,
   revokeSeat,
   clearSubscriptions,
 } from "@/store/slices/subscriptionsSlice";
@@ -21,6 +20,8 @@ import { Card, EmptyState } from "@/components/ui/Shell";
 import { Button, Badge, Spinner } from "@/components/ui/Primitives";
 import { Input, Textarea, Fieldset } from "@/components/ui/Field";
 import { DateField } from "@/components/ui/DatePicker";
+import AssignSeatForm from "@/components/admin/AssignSeatForm";
+import SeatPerson from "@/components/admin/SeatPerson";
 
 function toDateInputValue(iso) {
   if (!iso) return "";
@@ -218,44 +219,6 @@ function ProgressCell({ progress }) {
   );
 }
 
-function AssignSeatForm({ subscriptionId, disabled, onAssigned }) {
-  const dispatch = useAppDispatch();
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setBusy(true);
-    const res = await dispatch(assignSeat({ id: subscriptionId, email: email.trim().toLowerCase() }));
-    setBusy(false);
-    if (assignSeat.fulfilled.match(res)) {
-      dispatch(pushToast("Seat assigned", "success"));
-      setEmail("");
-      onAssigned();
-    } else {
-      dispatch(pushToast(res.payload?.message || "Could not assign seat", "error"));
-    }
-  };
-
-  return (
-    <form onSubmit={submit} className="flex items-end gap-3">
-      <div className="flex-1">
-        <Input
-          type="email"
-          required
-          disabled={disabled}
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="learner@example.com"
-        />
-      </div>
-      <Button type="submit" variant="outline" disabled={disabled} loading={busy}>
-        Assign seat
-      </Button>
-    </form>
-  );
-}
-
 function SubscriptionCard({ sub, onChanged }) {
   const dispatch = useAppDispatch();
   const [seatLimitDraft, setSeatLimitDraft] = useState(String(sub.seatLimit));
@@ -328,7 +291,7 @@ function SubscriptionCard({ sub, onChanged }) {
   return (
     <Card className="space-y-4 p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2.5">
             <Badge tone="admin">{sub.type === "enterprise" ? "Enterprise" : "Single"}</Badge>
             <span className="font-mono font-semibold text-ink">{sub.subscriptionCode}</span>
@@ -391,7 +354,7 @@ function SubscriptionCard({ sub, onChanged }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-ink/8 bg-cream-100/60 text-left text-xs uppercase tracking-wide text-ink-muted">
-              <th className="px-4 py-2.5 font-medium">Email</th>
+              <th className="px-4 py-2.5 font-medium">Learner</th>
               <th className="px-4 py-2.5 font-medium">Status</th>
               <th className="px-4 py-2.5 font-medium">Current state</th>
               <th className="px-4 py-2.5" />
@@ -405,7 +368,9 @@ function SubscriptionCard({ sub, onChanged }) {
             ) : (
               seats.map((seat) => (
                 <tr key={seat._id || seat.email}>
-                  <td className="px-4 py-2.5 text-ink">{seat.email}</td>
+                  <td className="max-w-[18rem] px-4 py-2.5">
+                    <SeatPerson seat={seat} />
+                  </td>
                   <td className="px-4 py-2.5">
                     <Badge tone={seat.status === "revoked" ? "archived" : "available"}>{seat.status}</Badge>
                   </td>

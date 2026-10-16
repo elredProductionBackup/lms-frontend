@@ -77,7 +77,9 @@ export default function ManageCoursePage() {
         <Tabs tabs={tabs} active={tab} onChange={setTab} />
       </div>
 
-      {tab === "details" && <DetailsTab course={current} />}
+      {tab === "details" && (
+        <DetailsTab course={current} onGoToModules={() => setTab("recordings")} />
+      )}
       {tab === "recordings" && <RecordingsTab course={current} />}
       {tab === "subscriptions" && role === "admin" && <SubscriptionsTab course={current} />}
       {tab === "roster" && <RosterTab course={current} />}

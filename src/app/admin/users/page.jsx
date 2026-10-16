@@ -8,6 +8,7 @@ import {
   addMember,
   changeMemberRole,
   removeMember,
+  PERSON_NAME_MAX,
 } from "@/store/slices/membersSlice";
 import { pushToast } from "@/store/slices/uiSlice";
 import PageHeader from "@/components/admin/PageHeader";
@@ -115,15 +116,25 @@ export default function AdminUsersPage() {
 function AddMemberCard() {
   const dispatch = useAppDispatch();
   const { mutating } = useAppSelector((s) => s.members);
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("author");
 
+  // POST /members { email, role, name }. The name is used only when this
+  // creates the account; an existing account gets the role and keeps its name.
   const submit = async (e) => {
     e.preventDefault();
-    const res = await dispatch(addMember({ email: email.trim().toLowerCase(), role }));
+    const typed = name.trim();
+    const res = await dispatch(addMember({ email: email.trim().toLowerCase(), role, name: typed }));
     if (addMember.fulfilled.match(res)) {
-      dispatch(pushToast("Member added", "success"));
+      const used = res.payload?.name?.trim() || "";
+      dispatch(
+        typed && used && used !== typed
+          ? pushToast(`${used} already had an account: role updated, name kept.`, "default")
+          : pushToast(`${used || typed || "Member"} added`, "success")
+      );
       dispatch(fetchMembers(""));
+      setName("");
       setEmail("");
       setRole("author");
     } else {
@@ -138,7 +149,18 @@ function AddMemberCard() {
         Only admins and authors can be added directly here — learners get access via seat assignment on a
         course or by requesting to join from the public catalog.
       </p>
-      <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
+      <form onSubmit={submit} className="flex flex-wrap items-start gap-3">
+        <div className="min-w-[200px] flex-1">
+          <Fieldset label="Display name" hint="new people only" htmlFor="member-name">
+            <Input
+              id="member-name"
+              maxLength={PERSON_NAME_MAX}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Asha Verma"
+            />
+          </Fieldset>
+        </div>
         <div className="min-w-[240px] flex-1">
           <Fieldset label="Email">
             <Input
@@ -158,7 +180,7 @@ function AddMemberCard() {
             </Select>
           </Fieldset>
         </div>
-        <Button type="submit" variant="teal" loading={mutating}>
+        <Button type="submit" variant="teal" loading={mutating} className="sm:mt-[1.6rem]">
           <UserPlus size={16} /> Add member
         </Button>
       </form>

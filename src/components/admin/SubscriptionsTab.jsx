@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Ticket, UserPlus, XCircle, Pause, Play } from "lucide-react";
+import { Plus, Ticket, XCircle, Pause, Play } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import {
   fetchSubscriptions,
   createSubscription,
   updateSubscription,
-  assignSeat,
   revokeSeat,
 } from "@/store/slices/subscriptionsSlice";
 import { pushToast } from "@/store/slices/uiSlice";
@@ -15,6 +14,8 @@ import { Card, Modal, EmptyState } from "@/components/ui/Shell";
 import { Button, Badge, Spinner } from "@/components/ui/Primitives";
 import { Input, Select, Textarea, Fieldset } from "@/components/ui/Field";
 import { DateTimeField } from "@/components/ui/DatePicker";
+import AssignSeatForm from "@/components/admin/AssignSeatForm";
+import SeatPerson from "@/components/admin/SeatPerson";
 import { formatDay, clock } from "@/lib/format";
 
 function toLocalInput(iso) {
@@ -69,21 +70,8 @@ export default function SubscriptionsTab({ course }) {
 
 function SubscriptionCard({ sub, courseId, mutating }) {
   const dispatch = useAppDispatch();
-  const [email, setEmail] = useState("");
   const activeSeats = (sub.seats || []).filter((s) => s.status === "active");
   const suspended = sub.status === "suspended";
-
-  const assign = async () => {
-    if (!email.trim()) return;
-    const res = await dispatch(assignSeat({ id: sub._id, email: email.trim() }));
-    if (assignSeat.fulfilled.match(res)) {
-      dispatch(pushToast("Seat assigned", "success"));
-      setEmail("");
-      dispatch(fetchSubscriptions(courseId));
-    } else {
-      dispatch(pushToast(res.payload?.message || "Could not assign seat", "error"));
-    }
-  };
 
   const revoke = async (seatEmail) => {
     const res = await dispatch(revokeSeat({ id: sub._id, email: seatEmail }));
@@ -117,18 +105,11 @@ function SubscriptionCard({ sub, courseId, mutating }) {
 
       <div className="px-5 py-4">
         {!suspended && activeSeats.length < sub.seatLimit && (
-          <div className="mb-4 flex gap-2">
-            <Input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="learner@email.com"
-              className="max-w-xs"
-              onKeyDown={(e) => e.key === "Enter" && assign()}
+          <div className="mb-4">
+            <AssignSeatForm
+              subscriptionId={sub._id}
+              onAssigned={() => dispatch(fetchSubscriptions(courseId))}
             />
-            <Button size="sm" variant="teal" onClick={assign} loading={mutating}>
-              <UserPlus size={14} /> Assign seat
-            </Button>
           </div>
         )}
 
@@ -142,7 +123,9 @@ function SubscriptionCard({ sub, courseId, mutating }) {
                 className="flex items-center gap-3 rounded-lg bg-cream-100 px-3 py-2"
               >
                 <span className={`h-2 w-2 rounded-full ${seat.status === "active" ? "bg-available" : "bg-ink/30"}`} />
-                <span className="flex-1 text-sm text-ink">{seat.email}</span>
+                <span className="min-w-0 flex-1 text-sm">
+                  <SeatPerson seat={seat} />
+                </span>
                 {seat.progress && (
                   <span className="text-xs text-ink-muted">
                     {seat.progress.videoTitle || "watching"} · {clock(seat.progress.positionSeconds)}

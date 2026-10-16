@@ -15,6 +15,7 @@ import PageHeader from "@/components/admin/PageHeader";
 import { Card, Modal, EmptyState } from "@/components/ui/Shell";
 import { Button, Avatar, Spinner } from "@/components/ui/Primitives";
 import { Input, Textarea, Fieldset } from "@/components/ui/Field";
+import { isSameUser } from "@/lib/identity";
 
 export default function AdminAuthorsPage() {
   const dispatch = useAppDispatch();
@@ -149,8 +150,8 @@ function AddAuthorCard({ onAdded }) {
           <Fieldset label="Email">
             <Input type="email" required value={form.email} onChange={set("email")} placeholder="author@example.com" />
           </Fieldset>
-          <Fieldset label="Name" hint="optional">
-            <Input value={form.name} onChange={set("name")} placeholder="Full name" />
+          <Fieldset label="Display name" hint="new people only">
+            <Input maxLength={100} value={form.name} onChange={set("name")} placeholder="e.g. Asha Verma" />
           </Fieldset>
         </div>
         <Fieldset label="Photo" hint="optional">
@@ -179,6 +180,10 @@ function EditAuthorModal({ author, onClose }) {
   const dispatch = useAppDispatch();
   const fileRef = useRef(null);
   const { mutating } = useAppSelector((s) => s.members);
+  const me = useAppSelector((s) => s.auth.user);
+  // Only the person can change their display name (PUT /users/:userId/profile
+  // refuses a different name from an admin). Sending it unchanged is fine.
+  const isSelf = Boolean(author) && isSameUser(me, { _id: author.userId, email: author.email });
   const [name, setName] = useState("");
   const [aboutHtml, setAboutHtml] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -208,9 +213,14 @@ function EditAuthorModal({ author, onClose }) {
   };
 
   const save = async () => {
-    if (!name.trim()) return;
+    if (isSelf && !name.trim()) return;
     const res = await dispatch(
-      updateMemberProfile({ userId: author.userId, name: name.trim(), aboutHtml })
+      updateMemberProfile({
+        userId: author.userId,
+        // Someone else's name isn't sent at all; the partial update leaves it.
+        name: isSelf ? name.trim() : undefined,
+        aboutHtml,
+      })
     );
     if (updateMemberProfile.fulfilled.match(res)) {
       dispatch(pushToast("Profile saved", "success"));
@@ -238,8 +248,15 @@ function EditAuthorModal({ author, onClose }) {
           </Button>
         </div>
 
-        <Fieldset label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
+        <Fieldset label="Display name" hint={isSelf ? "" : "only they can change it"}>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Full name"
+            disabled={!isSelf}
+            readOnly={!isSelf}
+            className={isSelf ? "" : "opacity-60"}
+          />
         </Fieldset>
 
         <Fieldset label="About us" hint="HTML allowed">
@@ -248,7 +265,7 @@ function EditAuthorModal({ author, onClose }) {
 
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button type="button" variant="teal" onClick={save} loading={mutating} disabled={!name.trim()}>
+          <Button type="button" variant="teal" onClick={save} loading={mutating} disabled={isSelf && !name.trim()}>
             Save profile
           </Button>
         </div>

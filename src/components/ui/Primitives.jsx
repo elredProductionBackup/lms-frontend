@@ -75,6 +75,11 @@ export function Spinner({ size = 20, className = "" }) {
   return <Loader2 size={size} className={`animate-spin text-ink-muted ${className}`} />;
 }
 
+// Black-to-crimson brand gradient (the featured card's look), with the red
+// pulled in closer so it still shows on small circles and pills.
+export const BRAND_GRADIENT =
+  "radial-gradient(110% 110% at 85% 90%, rgba(192,24,35,0.95) 0%, rgba(153,18,27,0.55) 35%, rgba(0,0,0,0) 72%), linear-gradient(150deg, #1c1215 0%, #141317 55%, #0d0d10 100%)";
+
 export function Avatar({ name, src, size = 36, className = "" }) {
   // Only use the image when avatarUrl is a real, non-blank string; a missing
   // key, null, "" or "   " all fall back to initials.
@@ -90,8 +95,8 @@ export function Avatar({ name, src, size = 36, className = "" }) {
 
   const initials = (
     <span
-      className={`inline-flex items-center justify-center rounded-full bg-teal text-white font-semibold ${className}`}
-      style={{ width: size, height: size, fontSize: size * 0.38 }}
+      className={`inline-flex shrink-0 items-center justify-center rounded-full text-white font-semibold ${className}`}
+      style={{ width: size, height: size, fontSize: size * 0.38, background: BRAND_GRADIENT }}
     >
       {initialsOf(name)}
     </span>

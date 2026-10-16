@@ -6,10 +6,20 @@ import { usePathname, useRouter } from "next/navigation";
 import { LayoutGrid, User, LogOut, Shield, ChevronDown } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { logout } from "@/store/slices/authSlice";
-import { mediaUrl } from "@/lib/api";
 import { Avatar } from "@/components/ui/Primitives";
+import BrandMark from "@/components/ui/BrandMark";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { useDismiss } from "@/hooks/usePopover";
+
+// Routes where the "Sessions" link is hidden. Each entry also covers its
+// nested routes, e.g. "/courses" hides it on /courses/abc123 and
+// /courses/abc123/lessons/xyz as well.
+const HIDE_SESSIONS_ON = ["/home", "/courses", "/admin"];
+
+function matchesRoute(pathname, base) {
+  if (!pathname) return false;
+  return pathname === base || pathname.startsWith(`${base}/`);
+}
 
 export default function TopNav() {
   const dispatch = useAppDispatch();
@@ -19,8 +29,11 @@ export default function TopNav() {
   const menuRef = useRef(null);
   const triggerRef = useRef(null);
   const { user, role } = useAppSelector((s) => s.auth);
-  const settings = useAppSelector((s) => s.settings);
   const { confirm, dialog } = useConfirm();
+
+  const showSessions = !HIDE_SESSIONS_ON.some((base) =>
+    matchesRoute(pathname, base)
+  );
 
   // Close the account menu on any click outside it. (The old full-screen
   // overlay didn't work: the header's backdrop-blur turns `position: fixed`
@@ -49,7 +62,7 @@ export default function TopNav() {
     setOpen(false);
     const ok = await confirm({
       title: "Log out?",
-      message: "To sign back in, you'll need a new code from your email.",
+      message: "You'll need to sign in again with an email code or Google.",
       confirmLabel: "Log out",
       tone: "default",
       // Not unwrapped: even if the server call fails, we still sign out locally.
@@ -65,22 +78,20 @@ export default function TopNav() {
   return (
     <header className="sticky top-0 z-40 border-b border-ink/8 bg-cream-100/85 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-5">
-        <Link href="/home" className="flex items-center gap-2.5">
-          <img
-            src={settings.logoUrl ? mediaUrl(settings.logoUrl) : "/tpn.svg"}
-            alt={settings.name || "The Professional Network"}
-            className="h-8 w-auto"
-          />
+        <Link href="/home" className="flex min-w-0 items-center" aria-label="Learning home">
+          <BrandMark size="md" className="[&_img]:h-7 sm:[&_img]:h-8" />
         </Link>
 
         <nav className="flex items-center gap-1">
-          <Link
-            href="/home"
-            className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-ink-soft transition-colors hover:bg-ink/5 sm:px-3.5"
-          >
-            <LayoutGrid size={16} strokeWidth={1.75} />
-            <span className="hidden sm:inline">Sessions</span>
-          </Link>
+          {showSessions && (
+            <Link
+              href="/home"
+              className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-ink-soft transition-colors hover:bg-ink/5 sm:px-3.5"
+            >
+              <LayoutGrid size={16} strokeWidth={1.75} />
+              <span className="hidden sm:inline">Sessions</span>
+            </Link>
+          )}
           {(role === "admin" || role === "author") && (
             <Link
               href="/admin"

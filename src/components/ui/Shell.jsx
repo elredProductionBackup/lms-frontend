@@ -72,12 +72,12 @@ export function EmptyState({ icon: Icon, title, description, action }) {
 
 export function Tabs({ tabs, active, onChange }) {
   return (
-    <div className="flex gap-1 border-b border-ink/10">
+    <div className="flex gap-1 overflow-x-auto border-b border-ink/10 [scrollbar-width:none]">
       {tabs.map((t) => (
         <button
           key={t.value}
           onClick={() => onChange(t.value)}
-          className={`relative -mb-px px-4 py-2.5 text-sm font-medium transition-colors ${
+          className={`relative -mb-px shrink-0 whitespace-nowrap px-3 py-2.5 text-sm font-medium transition-colors sm:px-4 ${
             active === t.value
               ? "text-teal"
               : "text-ink-muted hover:text-ink"

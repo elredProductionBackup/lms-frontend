@@ -21,6 +21,7 @@ import {
   deleteBookmark,
 } from "@/store/slices/bookmarksSlice";
 import { clock } from "@/lib/format";
+import { PosterImage, STATIC_POSTER } from "@/components/learner/Poster";
 
 // Available playback speeds. Speed can be changed freely — only *seeking ahead*
 // is restricted (see the max-watched guard below).
@@ -97,10 +98,49 @@ function captionsUrlFromManifest(manifestUrl) {
   return manifestUrl.replace(/[^/?#]*\.m3u8(\?[^#]*)?(#.*)?$/i, "captions.vtt");
 }
 
+// Dimmed poster behind the locked / processing cards, so the frame still
+// shows which module it is.
+function PosterBackdrop({ sources }) {
+  return (
+    <>
+      <PosterImage
+        sources={sources}
+        className="absolute inset-0 h-full w-full scale-110 object-cover opacity-30 blur-md"
+      />
+      <div className="absolute inset-0 bg-black/55" />
+    </>
+  );
+}
+
+// posters: images to try in order (see posterSources in Poster.jsx).
 const VideoPlayer = forwardRef(function VideoPlayer(
-  { courseId, video, unlocked, onTime, wide, onToggleWide },
+  {
+    courseId,
+    video,
+    unlocked: unlockedProp,
+    enrolled = true,
+    onAccessLost,
+    onTime,
+    wide,
+    onToggleWide,
+    posters = [STATIC_POSTER],
+  },
   ref
 ) {
+  // A 403 from stream-session or a heartbeat means the access window closed
+  // (or access was removed) while the page was open: stop and show the lock,
+  // and let the page re-read the course flags.
+  const [accessLost, setAccessLost] = useState(false);
+  useEffect(() => {
+    if (unlockedProp) setAccessLost(false); // e.g. an admin extended the window
+  }, [unlockedProp]);
+  const unlocked = Boolean(unlockedProp) && !accessLost;
+  const loseAccess = useCallback(() => {
+    videoRef.current?.pause?.();
+    setAccessLost(true);
+    onAccessLost?.();
+  }, [onAccessLost]);
+
   const dispatch = useAppDispatch();
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
@@ -127,6 +167,18 @@ const VideoPlayer = forwardRef(function VideoPlayer(
   const [renamingId, setRenamingId] = useState(null); // bookmark being renamed
   const [renameText, setRenameText] = useState("");
   const [toast, setToast] = useState(null); // transient "−10s" / "Jumped to…" hint
+
+  // Feedback for every control press: a spinner while a requested play hasn't
+  // started yet (pendingPlay) or the stream is fetching data after a seek /
+  // stall (buffering). `started` hides the big poster play button once the
+  // module has actually played.
+  const [pendingPlay, setPendingPlay] = useState(false);
+  const [buffering, setBuffering] = useState(false);
+  const [started, setStarted] = useState(false);
+  // True once the stream has loaded enough to know its length. Until then the
+  // centre button shows a spinner instead of a play icon.
+  const [mediaReady, setMediaReady] = useState(false);
+  const [savingBookmark, setSavingBookmark] = useState(false);
 
   // Captions
   const [captionsSrc, setCaptionsSrc] = useState(null); // blob URL once loaded
@@ -157,6 +209,10 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     setCurrent(0);
     setDuration(video?.durationSeconds || 0);
     setPlaying(false);
+    setPendingPlay(false);
+    setBuffering(false);
+    setStarted(false);
+    setMediaReady(false);
     maxWatchedRef.current = 0;
 
     (async () => {
@@ -177,7 +233,9 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         // Captions ride the same signed cookie the session just set.
         loadCaptions(res.manifestUrl);
       } catch (e) {
-        if (!cancelled) setError(e.message || "Could not start playback");
+        if (cancelled) return;
+        if (e?.code === "FORBIDDEN") loseAccess(); // UC-FA3
+        else setError(e.message || "Could not start playback");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -396,7 +454,12 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 
     const hb = (session.heartbeatSeconds || 300) * 1000;
     heartbeatTimer.current = setInterval(() => {
-      dispatch(streamHeartbeat({ courseId, videoId }));
+      dispatch(streamHeartbeat({ courseId, videoId }))
+        .unwrap()
+        .catch((e) => {
+          // UC-FA4: the window ended (or access was revoked) mid-watch.
+          if (e?.code === "FORBIDDEN") loseAccess();
+        });
     }, hb);
 
     return () => {
@@ -422,8 +485,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
       // The resume point is already-watched content, so this is a rewind into
       // the allowed range — never clamped.
       if (target > 0) el.currentTime = target;
-      const p = el.play?.();
-      if (p && typeof p.catch === "function") p.catch(() => {});
+      startPlayback();
     };
 
     if (el.readyState >= 1 /* HAVE_METADATA */) {
@@ -457,10 +519,27 @@ const VideoPlayer = forwardRef(function VideoPlayer(
   }, [resumePrompt, loading, startResumeTimeout]);
 
   // --- Controls ---
+
+  // play() with feedback: the spinner shows from the click until frames are
+  // actually moving. Only when paused, since play() on a playing element
+  // resolves without a "playing" event and would leave the spinner stuck.
+  const startPlayback = useCallback(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (!el.paused) return;
+    // Cleared by the "playing" event (frames are moving), a pause, or a
+    // refused play() — not by play() resolving, which can happen before the
+    // first frame is on screen.
+    setPendingPlay(true);
+    const p = el.play?.();
+    if (p && typeof p.catch === "function") p.catch(() => setPendingPlay(false));
+  }, []);
+
   const togglePlay = () => {
     const el = videoRef.current;
     if (!el) return;
-    el.paused ? el.play()?.catch?.(() => {}) : el.pause();
+    if (el.paused) startPlayback();
+    else el.pause();
   };
 
   const toggleMute = () => {
@@ -540,7 +619,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
   useImperativeHandle(ref, () => ({
     seekTo: (sec) => {
       const landed = seekToTime(sec);
-      videoRef.current?.play?.()?.catch?.(() => {});
+      startPlayback();
       if (landed != null) flashToast(`Jumped to ${clock(landed)}`);
     },
     getCurrentTime: () => videoRef.current?.currentTime || 0,
@@ -611,12 +690,16 @@ const VideoPlayer = forwardRef(function VideoPlayer(
   const addBookmark = async () => {
     const el = videoRef.current;
     if (!el || !videoId) return;
+    if (savingBookmark) return;
     const timestampSeconds = Math.max(0, el.currentTime || 0);
+    setSavingBookmark(true);
     try {
       await dispatch(saveBookmark({ courseId, videoId, timestampSeconds })).unwrap();
       flashToast(`Bookmarked ${clock(timestampSeconds)}`);
     } catch (e) {
       flashToast(e?.message || "Couldn't save bookmark");
+    } finally {
+      setSavingBookmark(false);
     }
   };
 
@@ -639,34 +722,67 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 
   const jumpToBookmark = (time) => {
     seekToTime(time);
-    videoRef.current?.play?.()?.catch?.(() => {});
+    startPlayback();
   };
 
   // --- Locked / not-ready states ---
   if (!unlocked) {
     return (
-      <div className="flex aspect-video flex-col items-center justify-center rounded-card bg-ink px-4 text-center text-cream-100">
-        <Lock size={30} strokeWidth={1.5} className="mb-3 text-general-light" />
-        <p className="font-serif text-lg sm:text-xl">This session is locked</p>
-        <p className="mt-1 text-sm text-cream-300">
-          Your access window is closed or you&apos;re not enrolled.
-        </p>
+      <div className="relative flex aspect-video flex-col items-center justify-center overflow-hidden rounded-card bg-ink px-4 text-center text-cream-100">
+        <PosterBackdrop sources={posters} />
+        <div className="relative z-10 flex flex-col items-center">
+          <Lock size={30} strokeWidth={1.5} className="mb-3 text-general-light" />
+          {enrolled ? (
+            <>
+              <p className="font-serif text-lg sm:text-xl">Your access has ended</p>
+              <p className="mt-1 max-w-sm text-sm text-cream-300">
+                The video is locked because your access window is closed. Comments, Q&amp;A,
+                notes and bookmarks still work.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="font-serif text-lg sm:text-xl">This session is locked</p>
+              <p className="mt-1 text-sm text-cream-300">You&apos;re not enrolled in this course.</p>
+            </>
+          )}
+        </div>
       </div>
     );
   }
   if (!ready) {
     return (
-      <div className="flex aspect-video flex-col items-center justify-center rounded-card bg-ink px-4 text-center text-cream-100">
-        <Loader2 size={28} className="mb-3 animate-spin text-general-light" />
-        <p className="font-serif text-base sm:text-lg">
-          {video?.status === "failed" ? "This recording failed to process" : "Recording is still processing"}
-        </p>
-        <p className="mt-1 text-sm text-cream-300">
-          {video?.status === "failed" ? "Contact the author." : "Check back shortly."}
-        </p>
+      <div className="relative flex aspect-video flex-col items-center justify-center overflow-hidden rounded-card bg-ink px-4 text-center text-cream-100">
+        <PosterBackdrop sources={posters} />
+        <div className="relative z-10 flex flex-col items-center">
+          {video?.status === "failed" ? (
+            <Lock size={28} strokeWidth={1.5} className="mb-3 text-general-light" />
+          ) : (
+            <Loader2 size={28} className="mb-3 animate-spin text-general-light" />
+          )}
+          <p className="font-serif text-base sm:text-lg">
+            {video?.status === "failed" ? "This recording failed to process" : "Recording is still processing"}
+          </p>
+          <p className="mt-1 text-sm text-cream-300">
+            {video?.status === "failed" ? "Contact the author." : "Check back shortly."}
+          </p>
+        </div>
       </div>
     );
   }
+
+  // One centre control, so there's never a play icon over a video that isn't
+  // ready yet:
+  //   - before the first play: the poster with a big button that shows a
+  //     spinner while the stream prepares or a requested play is starting,
+  //     and a play icon once it's ready to go;
+  //   - after that: a small spinner whenever playback is waiting on data
+  //     (seek, skip, stall, resume, bookmark/timestamp jump).
+  const preparing = loading || !mediaReady;
+  const waiting = !error && (preparing || pendingPlay || buffering);
+  const showPoster = !started;
+  const showBigButton = !started && !error && (waiting || !resumePrompt);
+  const showSmallSpinner = started && waiting;
 
   const pct = duration ? Math.min(100, (current / duration) * 100) : 0;
 
@@ -684,15 +800,40 @@ const VideoPlayer = forwardRef(function VideoPlayer(
           key={videoId}
           ref={videoRef}
           className="h-full w-full"
+          preload="metadata"
           onPlay={() => {
             setPlaying(true);
             // Any playback makes the resume prompt moot — get it out of the way.
             setResumePrompt(null);
           }}
-          onPause={() => setPlaying(false)}
+          onPlaying={() => {
+            setPendingPlay(false);
+            setBuffering(false);
+            setStarted(true);
+          }}
+          onPause={() => {
+            setPlaying(false);
+            setPendingPlay(false);
+          }}
+          onWaiting={() => setBuffering(true)}
+          onCanPlay={() => {
+            setBuffering(false);
+            setMediaReady(true);
+          }}
+          onSeeked={() => setBuffering(false)}
+          onEnded={() => {
+            setBuffering(false);
+            setPendingPlay(false);
+          }}
           onTimeUpdate={onTimeUpdate}
-          onSeeking={onSeeking}
-          onLoadedMetadata={(e) => setDuration(e.target.duration || 0)}
+          onSeeking={() => {
+            setBuffering(true);
+            onSeeking();
+          }}
+          onLoadedMetadata={(e) => {
+            setDuration(e.target.duration || 0);
+            setMediaReady(true);
+          }}
           onClick={togglePlay}
           playsInline
           crossOrigin="use-credentials"
@@ -712,9 +853,44 @@ const VideoPlayer = forwardRef(function VideoPlayer(
           )}
         </video>
 
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-            <Loader2 size={30} className="animate-spin text-white" />
+        {/* Thumbnail over the player until the module first plays */}
+        {showPoster && (
+          <PosterImage
+            sources={posters}
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+          />
+        )}
+
+        {/* Big centre button over the poster: spinner while preparing or
+            starting, play icon when ready. Clicking while it spins queues the
+            play, so the first click is never lost. */}
+        {showBigButton && (
+          <button
+            type="button"
+            onClick={() => {
+              if (!pendingPlay) startPlayback();
+            }}
+            aria-label={waiting ? "Loading video" : "Play"}
+            aria-busy={waiting}
+            className="group absolute inset-0 flex items-center justify-center bg-gradient-to-t from-black/45 via-black/10 to-transparent focus-visible:outline-none"
+          >
+            <span className="flex h-16 w-16 items-center justify-center rounded-full bg-white/95 text-ink shadow-card transition-transform duration-150 group-hover:scale-105 group-focus-visible:ring-4 group-focus-visible:ring-white/50 sm:h-20 sm:w-20">
+              {waiting ? (
+                <Loader2 size={30} className="animate-spin text-teal" />
+              ) : (
+                <Play size={28} fill="currentColor" className="ml-1" />
+              )}
+            </span>
+          </button>
+        )}
+
+        {/* Waiting on a press after playback has begun */}
+        {showSmallSpinner && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center" aria-live="polite">
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-black/55 backdrop-blur-sm">
+              <Loader2 size={28} className="animate-spin text-white" />
+              <span className="sr-only">Loading</span>
+            </span>
           </div>
         )}
 
@@ -724,7 +900,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
           </div>
         )}
 
-        {resumePrompt && !loading && (
+        {resumePrompt && !preparing && (
           <div
             onMouseEnter={clearResumeTimeout}
             onMouseLeave={startResumeTimeout}
@@ -816,7 +992,13 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         {/* Left cluster */}
         <div className="flex items-center gap-1.5 sm:gap-3">
           <button onClick={togglePlay} className="text-cream-100 hover:text-white" aria-label={playing ? "Pause" : "Play"}>
-            {playing ? <Pause size={20} /> : <Play size={20} fill="currentColor" />}
+            {pendingPlay || (buffering && playing) ? (
+              <Loader2 size={20} className="animate-spin" />
+            ) : playing ? (
+              <Pause size={20} />
+            ) : (
+              <Play size={20} fill="currentColor" />
+            )}
           </button>
           <button onClick={toggleMute} className="text-cream-100 hover:text-white" aria-label={muted ? "Unmute" : "Mute"}>
             {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
@@ -875,12 +1057,14 @@ const VideoPlayer = forwardRef(function VideoPlayer(
           {/* Bookmark current spot — label collapses to icon-only on mobile */}
           <button
             onClick={addBookmark}
-            disabled={!videoId}
-            className="flex items-center gap-1.5 rounded-full border border-white/15 px-2 py-1 text-xs text-cream-100 transition-colors hover:bg-white/10 sm:px-2.5"
+            disabled={!videoId || savingBookmark}
+            aria-busy={savingBookmark}
+            className="flex items-center gap-1.5 rounded-full border border-white/15 px-2 py-1 text-xs text-cream-100 transition-colors hover:bg-white/10 disabled:opacity-70 sm:px-2.5"
             aria-label="Bookmark this moment"
             title="Bookmark this moment"
           >
-            <BookmarkPlus size={15} /> <span className="hidden sm:inline">Bookmark</span>
+            {savingBookmark ? <Loader2 size={15} className="animate-spin" /> : <BookmarkPlus size={15} />}{" "}
+            <span className="hidden sm:inline">{savingBookmark ? "Saving" : "Bookmark"}</span>
           </button>
 
           {/* Playback speed */}
@@ -997,4 +1181,4 @@ const VideoPlayer = forwardRef(function VideoPlayer(
   );
 });
 
-export default VideoPlayer;
+export default VideoPlayer;

@@ -16,7 +16,7 @@ import {
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { logout } from "@/store/slices/authSlice";
 import { Avatar } from "@/components/ui/Primitives";
-import { mediaUrl } from "@/lib/api";
+import BrandMark from "@/components/ui/BrandMark";
 
 const LINKS = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard, adminOnly: true },
@@ -33,7 +33,6 @@ export default function Sidebar() {
   const dispatch = useAppDispatch();
   const router = useRouter();
   const { user, role } = useAppSelector((s) => s.auth);
-  const settings = useAppSelector((s) => s.settings);
 
   const links = LINKS.filter((l) => !l.adminOnly || role === "admin");
 
@@ -44,19 +43,8 @@ export default function Sidebar() {
 
   return (
     <aside className="flex h-full w-64 flex-col border-r border-ink/8 bg-cream-100">
-      <div className="flex h-16 shrink-0 items-center gap-2.5 px-6">
-        {settings.logoUrl ? (
-          <img src={mediaUrl(settings.logoUrl)} alt={settings.name} className="h-7 w-auto" />
-        ) : (
-          <span className="font-serif text-base leading-tight text-ink">
-                    <img
-            src={settings.logoUrl ? mediaUrl(settings.logoUrl) : "/tpn.svg"}
-            alt={settings.name || "The Professional Network"}
-            className="h-8 w-auto"
-          />
-            {/* <span className="italic text-frontend">the</span>Professional */}
-          </span>
-        )}
+      <div className="flex h-16 shrink-0 items-center px-6">
+        <BrandMark size="sm" />
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
