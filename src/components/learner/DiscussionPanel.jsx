@@ -42,20 +42,9 @@ import { Tabs } from "@/components/ui/Shell";
 import { Button, Avatar, Spinner } from "@/components/ui/Primitives";
 import { Textarea } from "@/components/ui/Field";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import UserHoverCard, { displayName } from "@/components/learner/UserHoverCard";
 import { clock, formatDate } from "@/lib/format";
 import { isSameUser } from "@/lib/identity";
-
-// Falls back to a capitalized email handle when the user has no name.
-function displayName(u) {
-  if (!u) return "";
-  if (u.name?.trim()) return u.name;
-  if (u.email) {
-    const handle = u.email.split("@")[0];
-    return handle.charAt(0).toUpperCase() + handle.slice(1);
-  }
-  return "";
-}
-
 
 // Tab label with the recording's total beside it ("Comments 12"). The count
 // only appears once the API has sent one; notes never get a total.
@@ -90,6 +79,26 @@ function useRun() {
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+// Avatar + name of a post's writer, each opening the profile hover card.
+// Emails in the card are only shown to moderators.
+function UserAvatar({ user, size, showEmail, className = "" }) {
+  return (
+    <UserHoverCard user={user} showEmail={showEmail} className={`shrink-0 rounded-full ${className}`}>
+      <Avatar name={displayName(user)} src={user?.avatarUrl} size={size} />
+    </UserHoverCard>
+  );
+}
+
+function UserName({ user, showEmail, className = "text-sm font-medium" }) {
+  return (
+    <UserHoverCard user={user} showEmail={showEmail}>
+      <span className={`truncate text-ink decoration-ink/30 underline-offset-2 hover:underline ${className}`}>
+        {displayName(user)}
+      </span>
+    </UserHoverCard>
+  );
+}
 
 // Comments, questions and notes are per recording: everything here is scoped
 // to `videoId`, the recording currently loaded in the player. The course page
@@ -277,6 +286,7 @@ function ReplyThread({
   noun = ["reply", "replies"],
   onDeleteParent, // set when the viewer may delete the comment/question itself
   parentNoun = "comment",
+  showEmail = false,
 }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -305,8 +315,8 @@ function ReplyThread({
         <div key={r._id} className="mt-2 flex gap-2 border-l-2 border-ink/10 pl-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-              <Avatar name={displayName(r.by)} src={r.by?.avatarUrl} size={20} />
-              <span className="text-xs font-medium text-ink">{displayName(r.by)}</span>
+              <UserAvatar user={r.by} size={20} showEmail={showEmail} />
+              <UserName user={r.by} showEmail={showEmail} className="text-xs font-medium" />
               {r.createdAt && (
                 <span className="text-[11px] text-ink-muted">{formatDate(r.createdAt)}</span>
               )}
@@ -461,54 +471,52 @@ function CommentsTab({ courseId, videoId, currentTime, seekTo, canModerate, isMi
           <EmptyState status={commentsStatus} error={error}>Your comments on this module will be visible to the public. Share your thoughts to get started.</EmptyState>
         ) : (
           <>
-            {comments.map((c) => {
-              const name = displayName(c.userId);
-              return (
-                <div
-                  key={c._id}
-                  className={`group rounded-xl p-3 ${
-                    c.isPinned ? "border border-teal/30 bg-teal/5" : ""
-                  }`}
-                >
-                  <div className="flex gap-3">
-                    <Avatar name={name} src={c.userId?.avatarUrl} size={30} className="mt-0.5" />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-medium text-ink">{name}</span>
-                        <span className="text-xs text-ink-muted">{formatDate(c.createdAt)}</span>
-                        <TimeChip seconds={c.timestampSeconds} onClick={() => seekTo?.(c.timestampSeconds)} />
-                        {c.isPinned && <PinnedTag />}
-                      </div>
-                      <p className="mt-0.5 break-words text-sm leading-relaxed text-ink-soft">{c.text}</p>
+            {comments.map((c) => (
+              <div
+                key={c._id}
+                className={`group rounded-xl p-3 ${
+                  c.isPinned ? "border border-teal/30 bg-teal/5" : ""
+                }`}
+              >
+                <div className="flex gap-3">
+                  <UserAvatar user={c.userId} size={30} showEmail={canModerate} className="mt-0.5 self-start" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <UserName user={c.userId} showEmail={canModerate} />
+                      <span className="text-xs text-ink-muted">{formatDate(c.createdAt)}</span>
+                      <TimeChip seconds={c.timestampSeconds} onClick={() => seekTo?.(c.timestampSeconds)} />
+                      {c.isPinned && <PinnedTag />}
                     </div>
-                    {canModerate && (
-                      <div className="flex items-start">
-                        <PinToggle
-                          pinned={c.isPinned}
-                          onPin={() => run(pinComment(c._id), "Comment wasn't pinned. Try again.")}
-                          onUnpin={() => run(unpinComment(c._id), "Comment wasn't unpinned. Try again.")}
-                        />
-                      </div>
-                    )}
+                    <p className="mt-0.5 break-words text-sm leading-relaxed text-ink-soft">{c.text}</p>
                   </div>
-
-                  <div className="pl-[42px]">
-                    <ReplyThread
-                      replies={c.replies}
-                      onReply={(body) =>
-                        run(replyToComment({ commentId: c._id, body }), "Reply wasn't posted. Try again.")
-                      }
-                      canDeleteReply={replyDeleter(isMine, canModerate)}
-                      onDeleteReply={removeReply(c)}
-                      onDeleteParent={
-                        isMine(c.userId) || canModerate ? () => removeComment(c) : undefined
-                      }
-                      parentNoun="comment"
-                    />
-                  </div>
+                  {canModerate && (
+                    <div className="flex items-start">
+                      <PinToggle
+                        pinned={c.isPinned}
+                        onPin={() => run(pinComment(c._id), "Comment wasn't pinned. Try again.")}
+                        onUnpin={() => run(unpinComment(c._id), "Comment wasn't unpinned. Try again.")}
+                      />
+                    </div>
+                  )}
                 </div>
-              );
-            })}
+
+                <div className="pl-[42px]">
+                  <ReplyThread
+                    replies={c.replies}
+                    onReply={(body) =>
+                      run(replyToComment({ commentId: c._id, body }), "Reply wasn't posted. Try again.")
+                    }
+                    canDeleteReply={replyDeleter(isMine, canModerate)}
+                    onDeleteReply={removeReply(c)}
+                    onDeleteParent={
+                      isMine(c.userId) || canModerate ? () => removeComment(c) : undefined
+                    }
+                    parentNoun="comment"
+                    showEmail={canModerate}
+                  />
+                </div>
+              </div>
+            ))}
             <LoadMore hasMore={commentsHasMore} loading={loadingMoreComments} onClick={loadMore} />
           </>
         )}
@@ -572,8 +580,8 @@ function QuestionsTab({ courseId, videoId, currentTime, seekTo, canModerate, isM
                   }`}
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    <Avatar name={displayName(q.askedBy)} src={q.askedBy?.avatarUrl} size={26} />
-                    <span className="text-sm font-medium text-ink">{displayName(q.askedBy)}</span>
+                    <UserAvatar user={q.askedBy} size={26} showEmail={canModerate} />
+                    <UserName user={q.askedBy} showEmail={canModerate} />
                     <TimeChip seconds={q.timestampSeconds} onClick={() => seekTo?.(q.timestampSeconds)} />
                     {q.isPinned && <PinnedTag />}
                     {canModerate && (
@@ -599,6 +607,7 @@ function QuestionsTab({ courseId, videoId, currentTime, seekTo, canModerate, isM
                     noun={["answer", "answers"]}
                     onDeleteParent={canDelete ? () => removeQuestion(q) : undefined}
                     parentNoun="question"
+                    showEmail={canModerate}
                   />
                 </div>
               );
