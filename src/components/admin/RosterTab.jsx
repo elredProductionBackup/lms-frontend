@@ -11,6 +11,8 @@ import { Button, Avatar, Badge, Spinner } from "@/components/ui/Primitives";
 import { Input, Select, Fieldset } from "@/components/ui/Field";
 import { DateTimeField } from "@/components/ui/DatePicker";
 import { formatDay } from "@/lib/format";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 
 function toLocalInput(iso) {
   if (!iso) return "";
@@ -22,15 +24,24 @@ function toLocalInput(iso) {
 
 export default function RosterTab({ course }) {
   const dispatch = useAppDispatch();
-  const roster = useAppSelector((s) => s.courses.roster);
+  const { roster, rosterPage } = useAppSelector((s) => s.courses);
   const [loading, setLoading] = useState(true);
+  const [firstLoad, setFirstLoad] = useState(true);
   const [editing, setEditing] = useState(null);
   const courseId = course._id;
+  const paging = usePaging({ count: roster.length, loading });
 
-  useEffect(() => {
+  // GET /courses/:id/users?start=&offset=
+  const load = () => {
     setLoading(true);
-    dispatch(fetchCourseRoster(courseId)).finally(() => setLoading(false));
-  }, [courseId, dispatch]);
+    return dispatch(fetchCourseRoster({ id: courseId, start: paging.start, offset: paging.offset })).finally(() => {
+      setLoading(false);
+      setFirstLoad(false);
+    });
+  };
+  useEffect(() => {
+    load();
+  }, [courseId, paging.start, paging.offset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isActive = (e) => {
     if (e.revoked) return false;
@@ -42,15 +53,15 @@ export default function RosterTab({ course }) {
     return now >= start && now <= end;
   };
 
-  if (loading) return <div className="flex justify-center py-16"><Spinner size={26} /></div>;
+  if (firstLoad && loading) return <div className="flex justify-center py-16"><Spinner size={26} /></div>;
 
-  if (roster.length === 0) {
+  if (roster.length === 0 && !loading && paging.start === 0) {
     return <EmptyState icon={Users} title="No enrollees" description="Assign seats under Subscriptions to enroll learners." />;
   }
 
   return (
-    <div>
-      <Card className="divide-y divide-ink/8">
+    <div ref={paging.listRef}>
+      <Card className={`divide-y divide-ink/8 transition-opacity ${loading ? "opacity-60" : ""}`}>
         {roster.map((e) => (
           <div key={e.enrollmentId} className="flex items-center gap-4 px-5 py-3.5">
             <Avatar name={e.name} size={38} />
@@ -74,6 +85,7 @@ export default function RosterTab({ course }) {
           </div>
         ))}
       </Card>
+      <Pagination {...paging.props(rosterPage)} noun="enrollees" />
 
       {editing && (
         <WindowModal
@@ -81,7 +93,7 @@ export default function RosterTab({ course }) {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            dispatch(fetchCourseRoster(courseId));
+            load();
           }}
         />
       )}

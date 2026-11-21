@@ -5,23 +5,29 @@ import Link from "next/link";
 import { Plus, BookOpen, ChevronRight, Film } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { fetchCourses, createCourse } from "@/store/slices/coursesSlice";
-import { fetchMembers } from "@/store/slices/membersSlice";
+import { fetchAuthorOptions } from "@/store/slices/membersSlice";
 import { pushToast } from "@/store/slices/uiSlice";
 import PageHeader from "@/components/admin/PageHeader";
 import { Card, Modal, EmptyState } from "@/components/ui/Shell";
 import { Button, Badge, Spinner } from "@/components/ui/Primitives";
 import { Input, Textarea, Select, Fieldset } from "@/components/ui/Field";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 import { plainText, formatDate } from "@/lib/format";
 
 export default function AdminCoursesPage() {
   const dispatch = useAppDispatch();
-  const { manage, status } = useAppSelector((s) => s.courses);
+  const { manage, managePage, status } = useAppSelector((s) => s.courses);
   const { role } = useAppSelector((s) => s.auth);
   const [showCreate, setShowCreate] = useState(false);
+  const [tick, setTick] = useState(0);
+  const loading = status === "loading";
+  const paging = usePaging({ count: manage.length, loading });
 
+  // GET /courses?scope=manage&start=&offset=
   useEffect(() => {
-    dispatch(fetchCourses("manage"));
-  }, [dispatch]);
+    dispatch(fetchCourses({ scope: "manage", start: paging.start, offset: paging.offset }));
+  }, [dispatch, paging.start, paging.offset, tick]);
 
   return (
     <div>
@@ -35,7 +41,7 @@ export default function AdminCoursesPage() {
         }
       />
 
-      {status === "loading" && manage.length === 0 ? (
+      {loading && manage.length === 0 ? (
         <div className="flex justify-center py-16"><Spinner size={26} /></div>
       ) : manage.length === 0 ? (
         <EmptyState
@@ -45,7 +51,8 @@ export default function AdminCoursesPage() {
           action={<Button variant="teal" onClick={() => setShowCreate(true)}><Plus size={16} /> New course</Button>}
         />
       ) : (
-        <div className="space-y-3">
+        <div ref={paging.listRef}>
+        <div className={`space-y-3 transition-opacity ${loading ? "opacity-60" : ""}`}>
           {manage.map((c) => (
             <Link key={c._id} href={`/admin/courses/${c._id}`}>
               <Card className="flex items-center gap-4 p-5 transition-colors hover:bg-cream-100">
@@ -72,22 +79,31 @@ export default function AdminCoursesPage() {
             </Link>
           ))}
         </div>
+        <Pagination {...paging.props(managePage)} noun="courses" />
+        </div>
       )}
 
-      <CreateCourseModal open={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateCourseModal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        onCreated={() => {
+          paging.reset();
+          setTick((t) => t + 1);
+        }}
+      />
     </div>
   );
 }
 
-function CreateCourseModal({ open, onClose }) {
+function CreateCourseModal({ open, onClose, onCreated }) {
   const dispatch = useAppDispatch();
   const { role } = useAppSelector((s) => s.auth);
   const { mutating } = useAppSelector((s) => s.courses);
-  const authors = useAppSelector((s) => s.members.items);
+  const authors = useAppSelector((s) => s.members.authorOptions);
   const [form, setForm] = useState({ title: "", detailsHtml: "", authorId: "" });
 
   useEffect(() => {
-    if (open && role === "admin") dispatch(fetchMembers("author"));
+    if (open && role === "admin") dispatch(fetchAuthorOptions());
   }, [open, role, dispatch]);
 
   const submit = async (e) => {
@@ -97,7 +113,7 @@ function CreateCourseModal({ open, onClose }) {
     const res = await dispatch(createCourse(body));
     if (createCourse.fulfilled.match(res)) {
       dispatch(pushToast("Course created", "success"));
-      dispatch(fetchCourses("manage"));
+      onCreated?.();
       setForm({ title: "", detailsHtml: "", authorId: "" });
       onClose();
     } else {

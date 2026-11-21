@@ -16,18 +16,24 @@ import { Card, Modal, EmptyState } from "@/components/ui/Shell";
 import { Button, Avatar, Spinner } from "@/components/ui/Primitives";
 import { Input, Textarea, Fieldset } from "@/components/ui/Field";
 import { isSameUser } from "@/lib/identity";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 
 export default function AdminAuthorsPage() {
   const dispatch = useAppDispatch();
-  const { items, status } = useAppSelector((s) => s.members);
+  const { items, page, status } = useAppSelector((s) => s.members);
   const [busyId, setBusyId] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [tick, setTick] = useState(0);
+  const loading = status === "loading";
+  const paging = usePaging({ count: items.length, loading });
 
-  const load = () => dispatch(fetchMembers("author"));
-
+  // GET /members?role=author&start=&offset=
   useEffect(() => {
-    load();
-  }, [dispatch]);
+    dispatch(fetchMembers({ role: "author", start: paging.start, offset: paging.offset }));
+  }, [dispatch, paging.start, paging.offset, tick]);
+
+  const reload = () => setTick((t) => t + 1);
 
   // Keep the open edit modal in sync with the freshest member data.
   const editingAuthor = editing ? items.find((a) => a.userId === editing) || null : null;
@@ -42,7 +48,10 @@ export default function AdminAuthorsPage() {
     setBusyId(userId);
     const res = await dispatch(removeMember(userId));
     setBusyId(null);
-    if (removeMember.fulfilled.match(res)) dispatch(pushToast("Author removed", "success"));
+    if (removeMember.fulfilled.match(res)) {
+      dispatch(pushToast("Author removed", "success"));
+      reload();
+    }
     else dispatch(pushToast(res.payload?.message || "Could not remove", "error"));
   };
 
@@ -50,22 +59,29 @@ export default function AdminAuthorsPage() {
     <div>
       <PageHeader title="Authors" description="Everyone with author access." />
 
-      <AddAuthorCard onAdded={load} />
+      <AddAuthorCard
+        onAdded={() => {
+          paging.reset();
+          reload();
+        }}
+      />
 
-      <div className="mt-6">
+      <div className="mt-6" ref={paging.listRef}>
         <h2 className="mb-1 font-serif text-xl text-ink">Authors</h2>
         <p className="mb-3 text-[13px] text-ink-muted">
           Removing an author does not reassign their courses — those courses become orphaned
           (author-less) but stay fully manageable from the dashboard.
         </p>
 
-        {status === "loading" && items.length === 0 ? (
+        {loading && items.length === 0 ? (
           <div className="flex justify-center py-16"><Spinner size={26} /></div>
         ) : items.length === 0 ? (
           <EmptyState icon={UserCheck} title="No authors yet" description="Add an author to get started." />
         ) : (
-          <Card className="overflow-hidden">
-            <table className="w-full text-sm">
+          <>
+          <Card className={`overflow-hidden transition-opacity ${loading ? "opacity-60" : ""}`}>
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[40rem] text-sm">
               <thead>
                 <tr className="border-b border-ink/8 text-left text-xs uppercase tracking-wide text-ink-muted">
                   <th className="px-5 py-3 font-medium">Author</th>
@@ -102,7 +118,10 @@ export default function AdminAuthorsPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </Card>
+          <Pagination {...paging.props(page)} noun="authors" />
+          </>
         )}
       </div>
 

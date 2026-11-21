@@ -83,6 +83,26 @@ on the player and keeps the rest of the page. Not enrolled hides the
 discussion tabs. A 403 from stream-session or a heartbeat stops playback and
 re-reads the course.
 
+### Pagination
+Every admin list sends `start` (records to skip) and `offset` (page size, 10 /
+20 / 50), e.g. `GET /members?role=author&start=20&offset=10`. Lists send them
+through `withPage()` and store `pageResult()` from `src/lib/api.js`; screens use
+`hooks/usePaging.js` with `components/ui/Pagination.jsx`.
+
+| Screen | Endpoint |
+|---|---|
+| Users, Authors, Members | `GET /members?role=` |
+| Join requests | `GET /join-requests` |
+| Audit log | `GET /audit-log?action=&actorEmail=&from=&to=` |
+| Courses, admin dashboard table | `GET /courses?scope=manage` |
+| Course roster tab | `GET /courses/:id/users` |
+| Subscriptions (tab and page) | `GET /courses/:id/subscriptions` |
+
+If a response includes `total`, the pager shows numbered pages and "of N";
+without it, it shows previous/next and treats a short page as the last one.
+Dropdowns that need everything (the course "Author" picker) and the learner
+catalog ask for `offset=1000` (`PAGE_SIZE_ALL`), so they aren't cut to one page.
+
 ### Thumbnails & posters
 The player, module list and session cards try images in order: the module's
 own `thumbnailUrl`, then the course cover, then `public/video-poster.svg`

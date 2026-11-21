@@ -3,13 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutGrid, User, LogOut, Shield, ChevronDown } from "lucide-react";
+import { LayoutGrid, User, Users, LogOut, Shield, ChevronDown } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { logout } from "@/store/slices/authSlice";
 import { Avatar } from "@/components/ui/Primitives";
 import BrandMark from "@/components/ui/BrandMark";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { useDismiss } from "@/hooks/usePopover";
+import { FEATURES } from "@/lib/features";
 
 // Routes where the "Sessions" link is hidden. Each entry also covers its
 // nested routes, e.g. "/courses" hides it on /courses/abc123 and
@@ -137,6 +138,16 @@ export default function TopNav() {
                 >
                   <User size={16} strokeWidth={1.75} /> Your profile
                 </Link>
+                {/* Every signed-in user sees it; people without an enterprise plan get an empty state. */}
+                {FEATURES.enterpriseTeam && (
+                  <Link
+                    href="/team"
+                    onClick={() => setOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-ink-soft transition-colors hover:bg-ink/5"
+                  >
+                    <Users size={16} strokeWidth={1.75} /> My team
+                  </Link>
+                )}
                 <button
                   type="button"
                   onClick={onLogout}

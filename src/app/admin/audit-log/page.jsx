@@ -5,6 +5,8 @@ import { Filter, ScrollText, RotateCcw } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { fetchAuditLog, fetchAuditActions } from "@/store/slices/adminSlice";
 import PageHeader from "@/components/admin/PageHeader";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 import { Card, Modal, EmptyState } from "@/components/ui/Shell";
 import { Button, Badge, Spinner } from "@/components/ui/Primitives";
 import { Input, Select, Fieldset } from "@/components/ui/Field";
@@ -29,7 +31,9 @@ function normalizeFilters(filters) {
 
 export default function AuditLogPage() {
   const dispatch = useAppDispatch();
-  const { entries, actions, auditStatus } = useAppSelector((s) => s.admin);
+  const { entries, auditPage, actions, auditStatus } = useAppSelector((s) => s.admin);
+  const loading = auditStatus === "loading";
+  const paging = usePaging({ count: entries.length, loading });
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [applied, setApplied] = useState(EMPTY_FILTERS);
   const [detail, setDetail] = useState(null);
@@ -38,18 +42,21 @@ export default function AuditLogPage() {
     dispatch(fetchAuditActions());
   }, [dispatch]);
 
+  // GET /audit-log?action=&actorEmail=&from=&to=&start=&offset=
   useEffect(() => {
-    dispatch(fetchAuditLog(normalizeFilters(applied)));
-  }, [dispatch, applied]);
+    dispatch(fetchAuditLog({ ...normalizeFilters(applied), start: paging.start, offset: paging.offset }));
+  }, [dispatch, applied, paging.start, paging.offset]);
 
   const set = (k) => (e) => setFilters((f) => ({ ...f, [k]: e.target.value }));
   const apply = (e) => {
     e.preventDefault();
     setApplied(filters);
+    paging.reset();
   };
   const reset = () => {
     setFilters(EMPTY_FILTERS);
     setApplied(EMPTY_FILTERS);
+    paging.reset();
   };
 
   const hasActiveFilters = useMemo(() => Object.values(applied).some(Boolean), [applied]);
@@ -58,7 +65,7 @@ export default function AuditLogPage() {
     <div>
       <PageHeader
         title="Audit log"
-        description={hasActiveFilters ? "Filtered results, newest first." : "Most recent 200 events, newest first."}
+        description={hasActiveFilters ? "Filtered results, newest first." : "Every event, newest first."}
       />
 
       <Card className="mb-5 p-5" as="form" onSubmit={apply}>
@@ -93,12 +100,14 @@ export default function AuditLogPage() {
         </div>
       </Card>
 
-      {auditStatus === "loading" ? (
+      {loading && entries.length === 0 ? (
         <div className="flex justify-center py-16"><Spinner size={26} /></div>
       ) : entries.length === 0 ? (
         <EmptyState icon={ScrollText} title="No entries" description="No events match these filters." />
       ) : (
-        <Card className="overflow-hidden">
+        <div ref={paging.listRef}>
+        <Card className={`overflow-hidden transition-opacity ${loading ? "opacity-60" : ""}`}>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-ink/8 text-left text-xs uppercase tracking-wide text-ink-muted">
@@ -140,7 +149,10 @@ export default function AuditLogPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </Card>
+        <Pagination {...paging.props(auditPage)} noun="events" />
+        </div>
       )}
 
       <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.action || "Details"}>

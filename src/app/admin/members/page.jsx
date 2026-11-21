@@ -15,6 +15,8 @@ import PageHeader from "@/components/admin/PageHeader";
 import { Card, Modal, EmptyState } from "@/components/ui/Shell";
 import { Button, Avatar, Badge, Spinner } from "@/components/ui/Primitives";
 import { Input, Select, Textarea, Fieldset } from "@/components/ui/Field";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 
 const ROLE_TABS = [
   { value: "", label: "All" },
@@ -25,22 +27,39 @@ const ROLE_TABS = [
 
 export default function MembersPage() {
   const dispatch = useAppDispatch();
-  const { items, status, roleFilter, mutating, error } = useAppSelector((s) => s.members);
+  const { items, page, status, roleFilter, mutating, error } = useAppSelector((s) => s.members);
   const [showAdd, setShowAdd] = useState(false);
+  const [tick, setTick] = useState(0);
+  const loading = status === "loading";
+  const paging = usePaging({ count: items.length, loading });
 
+  // GET /members?role=&start=&offset=
   useEffect(() => {
-    dispatch(fetchMembers(roleFilter));
-  }, [dispatch, roleFilter]);
+    dispatch(fetchMembers({ role: roleFilter, start: paging.start, offset: paging.offset }));
+  }, [dispatch, roleFilter, paging.start, paging.offset, tick]);
+
+  const reload = () => setTick((t) => t + 1);
+
+  const onTab = (value) => {
+    dispatch(setRoleFilter(value));
+    paging.reset();
+  };
 
   const onRoleChange = async (userId, role) => {
     const res = await dispatch(changeMemberRole({ userId, role }));
-    if (changeMemberRole.fulfilled.match(res)) dispatch(pushToast("Role updated", "success"));
+    if (changeMemberRole.fulfilled.match(res)) {
+      dispatch(pushToast("Role updated", "success"));
+      if (roleFilter) reload();
+    }
   };
 
   const onRemove = async (userId) => {
     if (!confirm("Remove this member? Their role will be cleared but their profile is kept.")) return;
     const res = await dispatch(removeMember(userId));
-    if (removeMember.fulfilled.match(res)) dispatch(pushToast("Member removed", "success"));
+    if (removeMember.fulfilled.match(res)) {
+      dispatch(pushToast("Member removed", "success"));
+      reload();
+    }
   };
 
   return (
@@ -59,7 +78,7 @@ export default function MembersPage() {
         {ROLE_TABS.map((t) => (
           <button
             key={t.value}
-            onClick={() => dispatch(setRoleFilter(t.value))}
+            onClick={() => onTab(t.value)}
             className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
               roleFilter === t.value
                 ? "bg-ink text-cream-50"
@@ -71,12 +90,13 @@ export default function MembersPage() {
         ))}
       </div>
 
-      {status === "loading" ? (
+      {loading && items.length === 0 ? (
         <div className="flex justify-center py-16"><Spinner size={26} /></div>
       ) : items.length === 0 ? (
         <EmptyState icon={Users} title="No members here" description="Add an admin or author to get started." />
       ) : (
-        <Card className="divide-y divide-ink/8">
+        <div ref={paging.listRef}>
+        <Card className={`divide-y divide-ink/8 transition-opacity ${loading ? "opacity-60" : ""}`}>
           {items.map((m) => (
             <div key={m.userId} className="flex items-center gap-4 px-6 py-4">
               <Avatar name={m.name} src={m.avatarUrl} size={40} />
@@ -104,10 +124,16 @@ export default function MembersPage() {
             </div>
           ))}
         </Card>
+        <Pagination {...paging.props(page)} noun="members" />
+        </div>
       )}
 
       <AddMemberModal
         open={showAdd}
+        onAdded={() => {
+          paging.reset();
+          reload();
+        }}
         onClose={() => setShowAdd(false)}
         mutating={mutating}
         error={error}
@@ -116,7 +142,7 @@ export default function MembersPage() {
   );
 }
 
-function AddMemberModal({ open, onClose, mutating, error }) {
+function AddMemberModal({ open, onClose, onAdded, mutating, error }) {
   const dispatch = useAppDispatch();
   const fileRef = useRef(null);
   const [form, setForm] = useState({ email: "", role: "author", name: "", aboutHtml: "" });
@@ -129,7 +155,7 @@ function AddMemberModal({ open, onClose, mutating, error }) {
     const res = await dispatch(addMember({ ...form, file }));
     if (addMember.fulfilled.match(res)) {
       dispatch(pushToast("Member added", "success"));
-      dispatch(fetchMembers(""));
+      onAdded?.();
       setForm({ email: "", role: "author", name: "", aboutHtml: "" });
       setFile(null);
       onClose();

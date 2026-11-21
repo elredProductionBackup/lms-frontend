@@ -12,6 +12,7 @@ import subscriptionsReducer from "./slices/subscriptionsSlice";
 import adminReducer from "./slices/adminSlice";
 import settingsReducer from "./slices/settingsSlice";
 import uiReducer from "./slices/uiSlice";
+import teamReducer from "./slices/teamSlice";
 
 export const store = configureStore({
   reducer: {
@@ -28,6 +29,7 @@ export const store = configureStore({
     admin: adminReducer,
     settings: settingsReducer,
     ui: uiReducer,
+    team: teamReducer,
   },
   middleware: (getDefault) =>
     getDefault({

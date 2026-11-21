@@ -88,17 +88,38 @@ export function withPage(path, { start = 0, offset = PAGE_SIZE } = {}) {
   return `${base}?${params.toString()}`;
 }
 
+// One page of a list endpoint, in the shape every paged slice stores.
+// `total` is used when the API sends it (exact page count, "of 47"); without
+// it, a full page means there may be more, and a short page means the end.
+export function pageResult(items, total, { start = 0, offset = PAGE_SIZE } = {}) {
+  const hasTotal = Number.isFinite(total);
+  return {
+    items,
+    page: {
+      start,
+      offset,
+      total: hasTotal ? total : null,
+      hasMore: hasTotal ? start + items.length < total : items.length === offset,
+    },
+  };
+}
+
+export const EMPTY_PAGE = { start: 0, offset: PAGE_SIZE, total: null, hasMore: false };
+
 // -----------------------------------------------------------------------------
 // Error
 // -----------------------------------------------------------------------------
 
 export class ApiError extends Error {
-  constructor({ code, message, status }) {
+  constructor({ code, message, status, body = null }) {
     super(message || "Request failed");
 
     this.name = "ApiError";
     this.code = code || "ERROR";
     this.status = status || 0;
+    // The parsed JSON of the failed response, for endpoints that put useful
+    // detail in an error body (e.g. per-email results from bulk seat adds).
+    this.body = body;
   }
 }
 
@@ -117,6 +138,7 @@ async function parseError(res) {
     code: err.code || `HTTP_${res.status}`,
     message: err.message || res.statusText || "Request failed",
     status: res.status,
+    body: payload,
   });
 }
 

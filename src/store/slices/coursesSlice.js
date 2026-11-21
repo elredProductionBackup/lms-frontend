@@ -1,14 +1,20 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import { api } from "@/lib/api";
+import { api, withPage, pageResult, EMPTY_PAGE, PAGE_SIZE, PAGE_SIZE_ALL } from "@/lib/api";
 import { renameVideo, deleteVideo, uploadVideoThumbnail } from "@/store/slices/videosSlice";
 
-// GET /api/courses?scope=catalog|manage
+// GET /api/courses?scope=catalog|manage&start=&offset=  -> { courses, total? }
+//   fetchCourses("catalog")                       -> every course (learner home)
+//   fetchCourses({ scope: "manage", start, offset }) -> one page (admin tables)
 export const fetchCourses = createAsyncThunk(
   "courses/list",
-  async (scope = "catalog", { rejectWithValue }) => {
+  async (arg = "catalog", { rejectWithValue }) => {
+    const paged = typeof arg === "object";
+    const scope = paged ? arg.scope || "manage" : arg;
+    const start = paged ? arg.start ?? 0 : 0;
+    const offset = paged ? arg.offset ?? PAGE_SIZE : PAGE_SIZE_ALL;
     try {
-      const data = await api.get(`/courses?scope=${scope}`);
-      return { scope, courses: data.courses || [] };
+      const data = await api.get(withPage(`/courses?scope=${scope}`, { start, offset }));
+      return { scope, ...pageResult(data.courses || [], data.total, { start, offset }) };
     } catch (e) {
       return rejectWithValue({ code: e.code, message: e.message });
     }
@@ -128,13 +134,13 @@ export const archiveCourse = createAsyncThunk(
   }
 );
 
-// GET /api/courses/:id/users  (roster)
+// GET /api/courses/:id/users?start=&offset=  (roster)  -> { users, total? }
 export const fetchCourseRoster = createAsyncThunk(
   "courses/roster",
-  async (id, { rejectWithValue }) => {
+  async ({ id, start = 0, offset = PAGE_SIZE }, { rejectWithValue }) => {
     try {
-      const data = await api.get(`/courses/${id}/users`);
-      return { id, users: data.users || [] };
+      const data = await api.get(withPage(`/courses/${id}/users`, { start, offset }));
+      return { id, ...pageResult(data.users || [], data.total, { start, offset }) };
     } catch (e) {
       return rejectWithValue({ code: e.code, message: e.message });
     }
@@ -158,9 +164,11 @@ const slice = createSlice({
   initialState: {
     catalog: [],
     manage: [],
+    managePage: EMPTY_PAGE,
     publicList: [],
     current: null,
     roster: [],
+    rosterPage: EMPTY_PAGE,
     status: "idle",
     detailStatus: "idle",
     error: null,
@@ -170,6 +178,7 @@ const slice = createSlice({
     clearCurrentCourse(s) {
       s.current = null;
       s.roster = [];
+      s.rosterPage = EMPTY_PAGE;
     },
   },
   extraReducers: (b) => {
@@ -179,8 +188,10 @@ const slice = createSlice({
     })
       .addCase(fetchCourses.fulfilled, (s, a) => {
         s.status = "idle";
-        if (a.payload.scope === "manage") s.manage = a.payload.courses;
-        else s.catalog = a.payload.courses;
+        if (a.payload.scope === "manage") {
+          s.manage = a.payload.items;
+          s.managePage = a.payload.page;
+        } else s.catalog = a.payload.items;
       })
       .addCase(fetchCourses.rejected, (s, a) => {
         s.status = "error";
@@ -229,7 +240,8 @@ const slice = createSlice({
     });
 
     b.addCase(fetchCourseRoster.fulfilled, (s, a) => {
-      s.roster = a.payload.users;
+      s.roster = a.payload.items;
+      s.rosterPage = a.payload.page;
     });
 
     // ----- module (video) changes made from the Modules tab -----

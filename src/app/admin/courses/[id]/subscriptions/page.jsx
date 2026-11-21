@@ -22,6 +22,8 @@ import { Input, Textarea, Fieldset } from "@/components/ui/Field";
 import { DateField } from "@/components/ui/DatePicker";
 import AssignSeatForm from "@/components/admin/AssignSeatForm";
 import SeatPerson from "@/components/admin/SeatPerson";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 
 function toDateInputValue(iso) {
   if (!iso) return "";
@@ -41,19 +43,26 @@ function defaultTo() {
 export default function CourseSubscriptionsPage() {
   const { id: courseId } = useParams();
   const dispatch = useAppDispatch();
-  const { items, status } = useAppSelector((s) => s.subscriptions);
+  const { items, page, status } = useAppSelector((s) => s.subscriptions);
   const [course, setCourse] = useState(null);
+  const loading = status === "loading";
+  const paging = usePaging({ count: items.length, loading });
 
-  const reload = () => dispatch(fetchSubscriptions(courseId));
+  // GET /courses/:id/subscriptions?start=&offset=
+  const reload = () =>
+    dispatch(fetchSubscriptions({ courseId, start: paging.start, offset: paging.offset }));
 
   useEffect(() => {
     if (!courseId) return;
     api.get(`/courses/${courseId}`).then(setCourse).catch(() => {});
-    reload();
     return () => {
       dispatch(clearSubscriptions());
     };
   }, [courseId, dispatch]);
+
+  useEffect(() => {
+    if (courseId) reload();
+  }, [courseId, paging.start, paging.offset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div>
@@ -70,17 +79,23 @@ export default function CourseSubscriptionsPage() {
       />
 
       <div className="space-y-6">
-        <AddSubscriptionForm courseId={courseId} onAdded={reload} />
+        <AddSubscriptionForm
+          courseId={courseId}
+          onAdded={() => (paging.start === 0 ? reload() : paging.reset())}
+        />
 
-        {status === "loading" && items.length === 0 ? (
+        {loading && items.length === 0 ? (
           <div className="flex justify-center py-16"><Spinner size={26} /></div>
         ) : items.length === 0 ? (
           <EmptyState title="No subscriptions yet" description="No subscriptions yet for this course." />
         ) : (
-          <div className="space-y-5">
-            {items.map((sub) => (
-              <SubscriptionCard key={sub._id} sub={sub} onChanged={reload} />
-            ))}
+          <div ref={paging.listRef}>
+            <div className={`space-y-5 transition-opacity ${loading ? "opacity-60" : ""}`}>
+              {items.map((sub) => (
+                <SubscriptionCard key={sub._id} sub={sub} onChanged={reload} />
+              ))}
+            </div>
+            <Pagination {...paging.props(page)} noun="subscriptions" />
           </div>
         )}
       </div>

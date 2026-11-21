@@ -1,13 +1,31 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import { api } from "@/lib/api";
+import { api, withPage, pageResult, EMPTY_PAGE, PAGE_SIZE, PAGE_SIZE_ALL } from "@/lib/api";
 
-// GET /api/members?role=
+const membersPath = (role) => (role ? `/members?role=${encodeURIComponent(role)}` : "/members");
+
+// GET /api/members?role=&start=&offset=
+//   role: admin | author | learner (optional; default is everyone with a role)
+//   -> { members, total? }
+// One page for the Users / Authors / Members tables.
 export const fetchMembers = createAsyncThunk(
   "members/list",
-  async (role, { rejectWithValue }) => {
+  async ({ role = "", start = 0, offset = PAGE_SIZE } = {}, { rejectWithValue }) => {
     try {
-      const qs = role ? `?role=${role}` : "";
-      const data = await api.get(`/members${qs}`);
+      const data = await api.get(withPage(membersPath(role), { start, offset }));
+      return pageResult(data.members || [], data.total, { start, offset });
+    } catch (e) {
+      return rejectWithValue({ code: e.code, message: e.message });
+    }
+  }
+);
+
+// Every author, for the "Author" dropdown when creating a course. Kept apart
+// from the paged table so opening the dropdown never replaces the table rows.
+export const fetchAuthorOptions = createAsyncThunk(
+  "members/authorOptions",
+  async (_, { rejectWithValue }) => {
+    try {
+      const data = await api.get(withPage(membersPath("author"), { start: 0, offset: PAGE_SIZE_ALL }));
       return data.members || [];
     } catch (e) {
       return rejectWithValue({ code: e.code, message: e.message });
@@ -99,6 +117,8 @@ const slice = createSlice({
   name: "members",
   initialState: {
     items: [],
+    page: EMPTY_PAGE,
+    authorOptions: [],
     status: "idle",
     mutating: false,
     error: null,
@@ -118,7 +138,8 @@ const slice = createSlice({
     })
       .addCase(fetchMembers.fulfilled, (s, a) => {
         s.status = "idle";
-        s.items = a.payload;
+        s.items = a.payload.items;
+        s.page = a.payload.page;
       })
       .addCase(fetchMembers.rejected, (s, a) => {
         s.status = "error";
@@ -142,8 +163,15 @@ const slice = createSlice({
       if (m) m.role = a.payload.role;
     });
 
+    b.addCase(fetchAuthorOptions.fulfilled, (s, a) => {
+      s.authorOptions = a.payload;
+    });
+
+    // The page refetches after a removal to pull the next row up.
     b.addCase(removeMember.fulfilled, (s, a) => {
       s.items = s.items.filter((m) => m.userId !== a.payload);
+      if (s.page.total != null) s.page.total = Math.max(0, s.page.total - 1);
+      s.authorOptions = s.authorOptions.filter((m) => m.userId !== a.payload);
     });
 
     b.addCase(updateMemberProfile.pending, (s) => {

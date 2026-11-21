@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import { api } from "@/lib/api";
+import { api, withPage, pageResult, EMPTY_PAGE, PAGE_SIZE } from "@/lib/api";
 
 // GET /api/overview  -> { courseCount, publishedCourseCount, userCount }
 export const fetchOverview = createAsyncThunk(
@@ -13,10 +13,11 @@ export const fetchOverview = createAsyncThunk(
   }
 );
 
-// GET /api/audit-log?action=&actorEmail=&from=&to=
+// GET /api/audit-log?action=&actorEmail=&from=&to=&start=&offset=
+//   -> { entries, total? }  (newest first)
 export const fetchAuditLog = createAsyncThunk(
   "admin/audit",
-  async (filters = {}, { rejectWithValue }) => {
+  async ({ start = 0, offset = PAGE_SIZE, ...filters } = {}, { rejectWithValue }) => {
     try {
       const qs = new URLSearchParams();
       if (filters.action) qs.set("action", filters.action);
@@ -24,8 +25,8 @@ export const fetchAuditLog = createAsyncThunk(
       if (filters.from) qs.set("from", filters.from);
       if (filters.to) qs.set("to", filters.to);
       const q = qs.toString();
-      const data = await api.get(`/audit-log${q ? `?${q}` : ""}`);
-      return data.entries || [];
+      const data = await api.get(withPage(`/audit-log${q ? `?${q}` : ""}`, { start, offset }));
+      return pageResult(data.entries || [], data.total, { start, offset });
     } catch (e) {
       return rejectWithValue({ code: e.code, message: e.message });
     }
@@ -50,6 +51,7 @@ const slice = createSlice({
   initialState: {
     overview: null,
     entries: [],
+    auditPage: EMPTY_PAGE,
     actions: [],
     overviewStatus: "idle",
     auditStatus: "idle",
@@ -74,7 +76,8 @@ const slice = createSlice({
     })
       .addCase(fetchAuditLog.fulfilled, (s, a) => {
         s.auditStatus = "idle";
-        s.entries = a.payload;
+        s.entries = a.payload.items;
+        s.auditPage = a.payload.page;
       })
       .addCase(fetchAuditLog.rejected, (s, a) => {
         s.auditStatus = "error";

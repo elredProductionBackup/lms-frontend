@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import { api } from "@/lib/api";
+import { api, withPage, pageResult, EMPTY_PAGE, PAGE_SIZE } from "@/lib/api";
 
 // POST /api/courses/:id/subscriptions
 //   { type, seatLimit?, subscriptionCode, subscriptionDetails?, accessStartAt, accessEndAt }
@@ -18,12 +18,13 @@ export const createSubscription = createAsyncThunk(
 // GET /api/courses/:id/subscriptions
 // Every seat: { email, userId, status, userExists, user: { id, name, email,
 // avatarUrl } | null, progress }. Revoked seats are listed too.
+// Paged: ?start=&offset=  -> { subscriptions, total? }
 export const fetchSubscriptions = createAsyncThunk(
   "subs/list",
-  async (courseId, { rejectWithValue }) => {
+  async ({ courseId, start = 0, offset = PAGE_SIZE }, { rejectWithValue }) => {
     try {
-      const data = await api.get(`/courses/${courseId}/subscriptions`);
-      return data.subscriptions || [];
+      const data = await api.get(withPage(`/courses/${courseId}/subscriptions`, { start, offset }));
+      return pageResult(data.subscriptions || [], data.total, { start, offset });
     } catch (e) {
       return rejectWithValue({ code: e.code, message: e.message });
     }
@@ -90,6 +91,7 @@ const slice = createSlice({
   name: "subscriptions",
   initialState: {
     items: [],
+    page: EMPTY_PAGE,
     status: "idle",
     mutating: false,
     error: null,
@@ -97,6 +99,7 @@ const slice = createSlice({
   reducers: {
     clearSubscriptions(s) {
       s.items = [];
+      s.page = EMPTY_PAGE;
     },
     clearSubError(s) {
       s.error = null;
@@ -108,7 +111,8 @@ const slice = createSlice({
     })
       .addCase(fetchSubscriptions.fulfilled, (s, a) => {
         s.status = "idle";
-        s.items = a.payload;
+        s.items = a.payload.items;
+        s.page = a.payload.page;
       })
       .addCase(fetchSubscriptions.rejected, (s, a) => {
         s.status = "error";

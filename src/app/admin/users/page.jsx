@@ -15,24 +15,46 @@ import PageHeader from "@/components/admin/PageHeader";
 import { Card, EmptyState } from "@/components/ui/Shell";
 import { Button, Avatar, Spinner } from "@/components/ui/Primitives";
 import { Input, Select, Fieldset } from "@/components/ui/Field";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 
 const ROLE_LABEL = { admin: "Admin", author: "Author", learner: "Learner" };
+const ROLE_FILTERS = [
+  { value: "", label: "All roles" },
+  { value: "admin", label: "Admins" },
+  { value: "author", label: "Authors" },
+  { value: "learner", label: "Learners" },
+];
 
 export default function AdminUsersPage() {
   const dispatch = useAppDispatch();
-  const { items, status } = useAppSelector((s) => s.members);
+  const { items, page, status } = useAppSelector((s) => s.members);
   const [busyId, setBusyId] = useState(null);
+  const [role, setRole] = useState("");
+  const [tick, setTick] = useState(0);
+  const loading = status === "loading";
+  const paging = usePaging({ count: items.length, loading });
 
+  // GET /members?role=&start=&offset=
   useEffect(() => {
-    dispatch(fetchMembers(""));
-  }, [dispatch]);
+    dispatch(fetchMembers({ role, start: paging.start, offset: paging.offset }));
+  }, [dispatch, role, paging.start, paging.offset, tick]);
 
-  const changeRole = async (userId, role) => {
+  const reload = () => setTick((t) => t + 1);
+
+  const onFilter = (value) => {
+    setRole(value);
+    paging.reset();
+  };
+
+  const changeRole = async (userId, nextRole) => {
     setBusyId(userId);
-    const res = await dispatch(changeMemberRole({ userId, role }));
+    const res = await dispatch(changeMemberRole({ userId, role: nextRole }));
     setBusyId(null);
-    if (changeMemberRole.fulfilled.match(res)) dispatch(pushToast("Role updated", "success"));
-    else dispatch(pushToast(res.payload?.message || "Could not change role", "error"));
+    if (changeMemberRole.fulfilled.match(res)) {
+      dispatch(pushToast("Role updated", "success"));
+      if (role) reload(); // they may no longer match the role filter
+    } else dispatch(pushToast(res.payload?.message || "Could not change role", "error"));
   };
 
   const remove = async (userId, label) => {
@@ -40,8 +62,10 @@ export default function AdminUsersPage() {
     setBusyId(userId);
     const res = await dispatch(removeMember(userId));
     setBusyId(null);
-    if (removeMember.fulfilled.match(res)) dispatch(pushToast("Member removed", "success"));
-    else dispatch(pushToast(res.payload?.message || "Could not remove", "error"));
+    if (removeMember.fulfilled.match(res)) {
+      dispatch(pushToast("Member removed", "success"));
+      reload(); // pull the next person up onto this page
+    } else dispatch(pushToast(res.payload?.message || "Could not remove", "error"));
   };
 
   return (
@@ -51,17 +75,42 @@ export default function AdminUsersPage() {
         description="Everyone with access — admins, authors, and learners."
       />
 
-      <AddMemberCard />
+      <AddMemberCard
+        onAdded={() => {
+          paging.reset();
+          reload();
+        }}
+      />
 
-      <div className="mt-6">
-        <h2 className="mb-3 font-serif text-xl text-ink">Members</h2>
-        {status === "loading" && items.length === 0 ? (
+      <div className="mt-6" ref={paging.listRef}>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-serif text-xl text-ink">
+            Members
+            {page.total != null && (
+              <span className="ml-2 align-middle font-sans text-sm font-normal text-ink-muted">{page.total}</span>
+            )}
+          </h2>
+          <div className="w-40">
+            <Select value={role} onChange={(e) => onFilter(e.target.value)} aria-label="Filter by role">
+              {ROLE_FILTERS.map((f) => (
+                <option key={f.value} value={f.value}>{f.label}</option>
+              ))}
+            </Select>
+          </div>
+        </div>
+        {loading && items.length === 0 ? (
           <div className="flex justify-center py-16"><Spinner size={26} /></div>
         ) : items.length === 0 ? (
-          <EmptyState icon={Users} title="No members yet" description="Add an admin or author to get started." />
+          role ? (
+            <EmptyState icon={Users} title={`No ${ROLE_LABEL[role].toLowerCase()}s`} description="Try another role, or choose All roles." />
+          ) : (
+            <EmptyState icon={Users} title="No members yet" description="Add an admin or author to get started." />
+          )
         ) : (
-          <Card className="overflow-hidden">
-            <table className="w-full text-sm">
+          <>
+          <Card className={`overflow-hidden transition-opacity ${loading ? "opacity-60" : ""}`}>
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[40rem] text-sm">
               <thead>
                 <tr className="border-b border-ink/8 text-left text-xs uppercase tracking-wide text-ink-muted">
                   <th className="px-5 py-3 font-medium">Name</th>
@@ -106,14 +155,17 @@ export default function AdminUsersPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </Card>
+          <Pagination {...paging.props(page)} noun="members" />
+          </>
         )}
       </div>
     </div>
   );
 }
 
-function AddMemberCard() {
+function AddMemberCard({ onAdded }) {
   const dispatch = useAppDispatch();
   const { mutating } = useAppSelector((s) => s.members);
   const [name, setName] = useState("");
@@ -133,7 +185,7 @@ function AddMemberCard() {
           ? pushToast(`${used} already had an account: role updated, name kept.`, "default")
           : pushToast(`${used || typed || "Member"} added`, "success")
       );
-      dispatch(fetchMembers(""));
+      onAdded?.();
       setName("");
       setEmail("");
       setRole("author");

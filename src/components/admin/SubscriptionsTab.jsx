@@ -17,6 +17,8 @@ import { DateTimeField } from "@/components/ui/DatePicker";
 import AssignSeatForm from "@/components/admin/AssignSeatForm";
 import SeatPerson from "@/components/admin/SeatPerson";
 import { formatDay, clock } from "@/lib/format";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 
 function toLocalInput(iso) {
   if (!iso) return "";
@@ -27,13 +29,18 @@ function toLocalInput(iso) {
 
 export default function SubscriptionsTab({ course }) {
   const dispatch = useAppDispatch();
-  const { items, status, mutating } = useAppSelector((s) => s.subscriptions);
+  const { items, page, status, mutating } = useAppSelector((s) => s.subscriptions);
   const [showCreate, setShowCreate] = useState(false);
   const courseId = course._id;
+  const loading = status === "loading";
+  const paging = usePaging({ count: items.length, loading });
 
+  // GET /courses/:id/subscriptions?start=&offset=
+  const reload = () =>
+    dispatch(fetchSubscriptions({ courseId, start: paging.start, offset: paging.offset }));
   useEffect(() => {
-    dispatch(fetchSubscriptions(courseId));
-  }, [courseId, dispatch]);
+    reload();
+  }, [courseId, paging.start, paging.offset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div>
@@ -46,15 +53,18 @@ export default function SubscriptionsTab({ course }) {
         </Button>
       </div>
 
-      {status === "loading" ? (
+      {loading && items.length === 0 ? (
         <div className="flex justify-center py-16"><Spinner size={26} /></div>
       ) : items.length === 0 ? (
         <EmptyState icon={Ticket} title="No subscriptions" description="Create one to start assigning seats." />
       ) : (
-        <div className="space-y-4">
-          {items.map((sub) => (
-            <SubscriptionCard key={sub._id} sub={sub} courseId={courseId} mutating={mutating} />
-          ))}
+        <div ref={paging.listRef}>
+          <div className={`space-y-4 transition-opacity ${loading ? "opacity-60" : ""}`}>
+            {items.map((sub) => (
+              <SubscriptionCard key={sub._id} sub={sub} onChanged={reload} mutating={mutating} />
+            ))}
+          </div>
+          <Pagination {...paging.props(page)} noun="subscriptions" />
         </div>
       )}
 
@@ -68,7 +78,7 @@ export default function SubscriptionsTab({ course }) {
   );
 }
 
-function SubscriptionCard({ sub, courseId, mutating }) {
+function SubscriptionCard({ sub, onChanged, mutating }) {
   const dispatch = useAppDispatch();
   const activeSeats = (sub.seats || []).filter((s) => s.status === "active");
   const suspended = sub.status === "suspended";
@@ -108,7 +118,7 @@ function SubscriptionCard({ sub, courseId, mutating }) {
           <div className="mb-4">
             <AssignSeatForm
               subscriptionId={sub._id}
-              onAssigned={() => dispatch(fetchSubscriptions(courseId))}
+              onAssigned={onChanged}
             />
           </div>
         )}

@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/hooks/redux";
 import { fetchCourses, createCourse } from "@/store/slices/coursesSlice";
-import { fetchMembers } from "@/store/slices/membersSlice";
+import { fetchAuthorOptions } from "@/store/slices/membersSlice";
 import { uploadLogo } from "@/store/slices/settingsSlice";
 import { pushToast } from "@/store/slices/uiSlice";
 import PageHeader from "@/components/admin/PageHeader";
@@ -21,6 +21,8 @@ import { Card, EmptyState } from "@/components/ui/Shell";
 import { Button, Badge, Spinner } from "@/components/ui/Primitives";
 import { Input, Textarea, Select, Fieldset } from "@/components/ui/Field";
 import { mediaUrl } from "@/lib/api";
+import Pagination from "@/components/ui/Pagination";
+import { usePaging } from "@/hooks/usePaging";
 
 const STATUS_LABEL = { draft: "Draft", published: "Published", archived: "Archived" };
 
@@ -33,11 +35,11 @@ function videoSummary(videos) {
 export default function AdminDashboardPage() {
   const dispatch = useAppDispatch();
   const { role } = useAppSelector((s) => s.auth);
+  const [coursesTick, setCoursesTick] = useState(0);
 
   useEffect(() => {
     if (role !== "admin") return;
-    dispatch(fetchCourses("manage"));
-    dispatch(fetchMembers("author"));
+    dispatch(fetchAuthorOptions());
   }, [dispatch, role]);
 
   // Authors don't get the platform dashboard — just a shortcut into their courses.
@@ -68,8 +70,8 @@ export default function AdminDashboardPage() {
       <PageHeader title="Admin dashboard" description="Every course, regardless of status." />
       <div className="space-y-6">
         <PlatformBrandingCard />
-        <CreateCourseCard />
-        <CoursesTableCard />
+        <CreateCourseCard onCreated={() => setCoursesTick((t) => t + 1)} />
+        <CoursesTableCard reloadKey={coursesTick} />
       </div>
     </div>
   );
@@ -120,10 +122,10 @@ function PlatformBrandingCard() {
   );
 }
 
-function CreateCourseCard() {
+function CreateCourseCard({ onCreated }) {
   const dispatch = useAppDispatch();
   const { mutating } = useAppSelector((s) => s.courses);
-  const authors = useAppSelector((s) => s.members.items);
+  const authors = useAppSelector((s) => s.members.authorOptions);
   const [form, setForm] = useState({ title: "", detailsHtml: "", authorId: "" });
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -139,7 +141,7 @@ function CreateCourseCard() {
     const res = await dispatch(createCourse(body));
     if (createCourse.fulfilled.match(res)) {
       dispatch(pushToast("Course created", "success"));
-      dispatch(fetchCourses("manage"));
+      onCreated?.();
       setForm({ title: "", detailsHtml: "", authorId: "" });
     } else {
       dispatch(pushToast(res.payload?.message || "Could not create", "error"));
@@ -192,19 +194,35 @@ function CreateCourseCard() {
   );
 }
 
-function CoursesTableCard() {
-  const { manage, status } = useAppSelector((s) => s.courses);
+function CoursesTableCard({ reloadKey }) {
+  const dispatch = useAppDispatch();
+  const { manage, managePage, status } = useAppSelector((s) => s.courses);
+  const loading = status === "loading";
+  const paging = usePaging({ count: manage.length, loading });
+
+  // A new course resets to the first page.
+  useEffect(() => {
+    if (reloadKey) paging.reset();
+  }, [reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // GET /courses?scope=manage&start=&offset=
+  useEffect(() => {
+    dispatch(fetchCourses({ scope: "manage", start: paging.start, offset: paging.offset }));
+  }, [dispatch, paging.start, paging.offset, reloadKey]);
 
   return (
+    <div ref={paging.listRef}>
     <Card className="overflow-hidden">
-      <div className="border-b border-ink/8 px-6 py-4">
+      <div className="flex items-baseline justify-between gap-3 border-b border-ink/8 px-6 py-4">
         <h2 className="font-serif text-lg text-ink">Courses</h2>
+        {managePage.total != null && <span className="text-sm text-ink-muted">{managePage.total}</span>}
       </div>
-      {status === "loading" && manage.length === 0 ? (
+      {loading && manage.length === 0 ? (
         <div className="flex justify-center py-14"><Spinner size={26} /></div>
       ) : manage.length === 0 ? (
         <div className="px-6 py-10 text-sm text-ink-muted">No courses yet.</div>
       ) : (
+        <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-60" : ""}`}>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-ink/8 text-left text-xs uppercase tracking-wide text-ink-muted">
@@ -236,7 +254,10 @@ function CoursesTableCard() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </Card>
+    <Pagination {...paging.props(managePage)} noun="courses" />
+    </div>
   );
 }

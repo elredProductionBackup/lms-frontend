@@ -1,13 +1,14 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import { api } from "@/lib/api";
+import { api, withPage, pageResult, EMPTY_PAGE, PAGE_SIZE } from "@/lib/api";
 
-// GET /api/join-requests  (admin, all statuses)
+// GET /api/join-requests?start=&offset=  (admin, all statuses)
+//   -> { requests, total? }
 export const fetchJoinRequests = createAsyncThunk(
   "join/list",
-  async (_, { rejectWithValue }) => {
+  async ({ start = 0, offset = PAGE_SIZE } = {}, { rejectWithValue }) => {
     try {
-      const data = await api.get("/join-requests");
-      return data.requests || [];
+      const data = await api.get(withPage("/join-requests", { start, offset }));
+      return pageResult(data.requests || [], data.total, { start, offset });
     } catch (e) {
       return rejectWithValue({ code: e.code, message: e.message });
     }
@@ -44,6 +45,7 @@ const slice = createSlice({
   name: "joinRequests",
   initialState: {
     items: [],
+    page: EMPTY_PAGE,
     status: "idle",
     reviewing: null, // requestId being processed
     submitStatus: "idle",
@@ -61,7 +63,8 @@ const slice = createSlice({
     })
       .addCase(fetchJoinRequests.fulfilled, (s, a) => {
         s.status = "idle";
-        s.items = a.payload;
+        s.items = a.payload.items;
+        s.page = a.payload.page;
       })
       .addCase(fetchJoinRequests.rejected, (s, a) => {
         s.status = "error";
